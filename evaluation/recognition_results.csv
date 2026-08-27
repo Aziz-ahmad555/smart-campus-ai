@@ -1,0 +1,16 @@
+category,image_file,expected,predicted,correct,time_seconds
+normal,WhatsApp Image 2026-08-27 at 10.55.22 AM.jpeg,AzizAhmad,Unknown,False,3.359
+normal,WhatsApp Image 2026-08-27 at 10.55.23 AM (1).jpeg,AzizAhmad,AzizAhmad,True,1.332
+normal,WhatsApp Image 2026-08-27 at 10.55.23 AM.jpeg,AzizAhmad,AzizAhmad,True,1.268
+low_light,WhatsApp Image 2026-08-27 at 10.56.23 AM.jpeg,AzizAhmad,AzizAhmad,True,1.189
+low_light,WhatsApp Image 2026-08-27 at 10.56.24 AM (1).jpeg,AzizAhmad,AzizAhmad,True,1.175
+low_light,WhatsApp Image 2026-08-27 at 10.56.24 AM.jpeg,AzizAhmad,AzizAhmad,True,1.115
+different_angle,WhatsApp Image 2026-08-27 at 10.57.21 AM.jpeg,AzizAhmad,Unknown,False,1.03
+different_angle,WhatsApp Image 2026-08-27 at 10.57.22 AM (1).jpeg,AzizAhmad,AzizAhmad,True,1.102
+different_angle,WhatsApp Image 2026-08-27 at 10.57.22 AM.jpeg,AzizAhmad,Unknown,False,1.052
+occluded,WhatsApp Image 2026-08-27 at 10.57.46 AM.jpeg,AzizAhmad,Unknown,False,1.142
+occluded,WhatsApp Image 2026-08-27 at 10.57.47 AM (1).jpeg,AzizAhmad,AzizAhmad,True,1.204
+occluded,WhatsApp Image 2026-08-27 at 10.57.47 AM.jpeg,AzizAhmad,Unknown,False,1.161
+unknown_person,WhatsApp Image 2026-08-27 at 10.58.13 AM (1).jpeg,Unknown,Unknown,True,1.214
+unknown_person,WhatsApp Image 2026-08-27 at 10.58.13 AM (2).jpeg,Unknown,Unknown,True,0.99
+unknown_person,WhatsApp Image 2026-08-27 at 10.58.13 AM.jpeg,Unknown,Unknown,True,1.147
