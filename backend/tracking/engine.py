@@ -1,4 +1,4 @@
-import os
+﻿import os
 import cv2
 import time
 import threading
@@ -12,15 +12,19 @@ load_dotenv()
 
 KNOWN_FACES_DB = "data/known_faces"
 EXIT_TIMEOUT_SECONDS = 5
+CROWD_THRESHOLD = 3  # number of people that triggers a crowd alert
+CROWD_ALERT_COOLDOWN = 10  # seconds between repeated crowd alerts
 
 person_model = YOLO("yolov8n.pt")
 known_track_ids = {}
 events_log = []
 events_lock = threading.Lock()
 
-# WebSocket broadcasting support
 connected_websockets = []
-main_event_loop = None  # set by FastAPI on startup
+main_event_loop = None
+
+last_crowd_alert_time = 0
+current_person_count = 0
 
 def get_db_connection():
     return psycopg2.connect(
@@ -68,7 +72,6 @@ def recognize_face_in_crop(crop):
         return None
 
 def broadcast_event(event):
-    """Send event to all connected WebSocket clients (thread-safe)."""
     if main_event_loop is None:
         return
     for ws in list(connected_websockets):
@@ -84,7 +87,7 @@ async def safe_send(ws, event):
 def add_event(event_type, track_id, label):
     event = {
         "type": event_type,
-        "track_id": int(track_id),
+        "track_id": int(track_id) if track_id is not None else None,
         "label": label,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
     }
@@ -94,7 +97,16 @@ def add_event(event_type, track_id, label):
             events_log.pop(0)
     broadcast_event(event)
 
+def check_crowd(person_count):
+    global last_crowd_alert_time
+    now = time.time()
+    if person_count >= CROWD_THRESHOLD and (now - last_crowd_alert_time) > CROWD_ALERT_COOLDOWN:
+        last_crowd_alert_time = now
+        add_event("CROWD_ALERT", None, f"{person_count} people detected in frame")
+        print(f"[CROWD ALERT] {person_count} people detected at {time.strftime('%H:%M:%S')}")
+
 def run_tracking_loop():
+    global current_person_count
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("Error: Could not open webcam.")
@@ -113,6 +125,9 @@ def run_tracking_loop():
         if results[0].boxes.id is not None:
             boxes = results[0].boxes.xyxy.cpu().numpy()
             track_ids = results[0].boxes.id.cpu().numpy().astype(int)
+            current_person_count = len(track_ids)
+
+            check_crowd(current_person_count)
 
             for box, track_id in zip(boxes, track_ids):
                 x1, y1, x2, y2 = map(int, box)
@@ -137,6 +152,8 @@ def run_tracking_loop():
                     print(f"[ENTRY] Track ID {track_id}: {label}")
                 else:
                     known_track_ids[track_id]["last_seen"] = time.time()
+        else:
+            current_person_count = 0
 
         now = time.time()
         exited_ids = []

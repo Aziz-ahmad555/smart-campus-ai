@@ -39,6 +39,13 @@ function App() {
     }
   }, [])
 
+  const getTypeColor = (type) => {
+    if (type === 'ENTRY') return 'green'
+    if (type === 'EXIT') return 'red'
+    if (type === 'CROWD_ALERT') return 'orange'
+    return 'black'
+  }
+
   return (
     <div style={{ fontFamily: 'sans-serif', maxWidth: '800px', margin: '0 auto', padding: '2rem' }}>
       <h1>Smart Campus AI — Live Dashboard</h1>
@@ -64,21 +71,24 @@ function App() {
           <tr style={{ borderBottom: '2px solid #333', textAlign: 'left' }}>
             <th style={{ padding: '8px' }}>Type</th>
             <th style={{ padding: '8px' }}>Track ID</th>
-            <th style={{ padding: '8px' }}>Person</th>
+            <th style={{ padding: '8px' }}>Person / Details</th>
             <th style={{ padding: '8px' }}>Timestamp</th>
           </tr>
         </thead>
         <tbody>
           {events.map((event, index) => (
-            <tr key={index} style={{ borderBottom: '1px solid #ddd' }}>
+            <tr key={index} style={{
+              borderBottom: '1px solid #ddd',
+              backgroundColor: event.type === 'CROWD_ALERT' ? '#fff3e0' : 'transparent'
+            }}>
               <td style={{
                 padding: '8px',
-                color: event.type === 'ENTRY' ? 'green' : 'red',
+                color: getTypeColor(event.type),
                 fontWeight: 'bold'
               }}>
-                {event.type}
+                {event.type === 'CROWD_ALERT' ? '⚠ CROWD ALERT' : event.type}
               </td>
-              <td style={{ padding: '8px' }}>{event.track_id}</td>
+              <td style={{ padding: '8px' }}>{event.track_id ?? '—'}</td>
               <td style={{ padding: '8px' }}>{event.label}</td>
               <td style={{ padding: '8px' }}>{event.timestamp}</td>
             </tr>
