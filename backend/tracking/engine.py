@@ -2,6 +2,7 @@ import os
 import cv2
 import time
 import threading
+import asyncio
 import psycopg2
 from dotenv import load_dotenv
 from deepface import DeepFace
@@ -14,8 +15,12 @@ EXIT_TIMEOUT_SECONDS = 5
 
 person_model = YOLO("yolov8n.pt")
 known_track_ids = {}
-events_log = []  # shared list the API will read from
+events_log = []
 events_lock = threading.Lock()
+
+# WebSocket broadcasting support
+connected_websockets = []
+main_event_loop = None  # set by FastAPI on startup
 
 def get_db_connection():
     return psycopg2.connect(
@@ -62,16 +67,32 @@ def recognize_face_in_crop(crop):
     except Exception:
         return None
 
+def broadcast_event(event):
+    """Send event to all connected WebSocket clients (thread-safe)."""
+    if main_event_loop is None:
+        return
+    for ws in list(connected_websockets):
+        asyncio.run_coroutine_threadsafe(safe_send(ws, event), main_event_loop)
+
+async def safe_send(ws, event):
+    try:
+        await ws.send_json(event)
+    except Exception:
+        if ws in connected_websockets:
+            connected_websockets.remove(ws)
+
 def add_event(event_type, track_id, label):
+    event = {
+        "type": event_type,
+        "track_id": int(track_id),
+        "label": label,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
     with events_lock:
-        events_log.append({
-            "type": event_type,
-            "track_id": int(track_id),
-            "label": label,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-        })
+        events_log.append(event)
         if len(events_log) > 100:
-            events_log.pop(0)  # keep log size manageable
+            events_log.pop(0)
+    broadcast_event(event)
 
 def run_tracking_loop():
     cap = cv2.VideoCapture(0)
