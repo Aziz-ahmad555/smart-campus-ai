@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar'
 import StatCard from './components/StatCard'
 import TrafficChart from './components/TrafficChart'
 import EventsTable from './components/EventsTable'
+import LiveFeed from './components/LiveFeed'
 
 function App() {
   const [events, setEvents] = useState([])
@@ -141,8 +142,9 @@ function App() {
           />
         </div>
 
-        <div className="grid grid-cols-1 gap-6 mb-6">
+        <div className="grid grid-cols-2 gap-6 mb-6">
           <TrafficChart data={chartData} />
+          <LiveFeed />
         </div>
 
         <EventsTable events={events} />
@@ -152,3 +154,4 @@ function App() {
 }
 
 export default App
+

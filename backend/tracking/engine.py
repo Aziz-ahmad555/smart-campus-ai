@@ -3,6 +3,7 @@ import cv2
 import time
 import threading
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import psycopg2
 from dotenv import load_dotenv
 from deepface import DeepFace
@@ -12,11 +13,13 @@ load_dotenv()
 
 KNOWN_FACES_DB = "data/known_faces"
 EXIT_TIMEOUT_SECONDS = 5
-CROWD_THRESHOLD = 3  # number of people that triggers a crowd alert
-CROWD_ALERT_COOLDOWN = 10  # seconds between repeated crowd alerts
+CROWD_THRESHOLD = 3
+CROWD_ALERT_COOLDOWN = 10
 
 person_model = YOLO("yolov8n.pt")
-known_track_ids = {}
+face_model = YOLO("backend/detection/models/yolov8n-face.pt")
+
+known_track_ids = {}  # track_id -> {label, entry_time, last_seen, status}
 events_log = []
 events_lock = threading.Lock()
 
@@ -25,6 +28,13 @@ main_event_loop = None
 
 last_crowd_alert_time = 0
 current_person_count = 0
+
+latest_frame = None
+frame_lock = threading.Lock()
+
+recognition_executor = ThreadPoolExecutor(max_workers=2)
+recognition_in_progress = set()
+recognition_results_lock = threading.Lock()
 
 def get_db_connection():
     return psycopg2.connect(
@@ -52,6 +62,26 @@ def lookup_student(photo_folder):
         return None
     except Exception as e:
         print("DB lookup error:", e)
+        return None
+
+def get_tight_face_crop(person_crop):
+    """Run face detection WITHIN the person crop to isolate just the face region."""
+    if person_crop.size == 0:
+        return None
+    try:
+        face_results = face_model(person_crop, verbose=False)
+        boxes = face_results[0].boxes.xyxy.cpu().numpy()
+        if len(boxes) == 0:
+            return None
+        # Take the largest face box (most prominent face in this person's crop)
+        areas = [(b[2]-b[0]) * (b[3]-b[1]) for b in boxes]
+        best_box = boxes[areas.index(max(areas))]
+        fx1, fy1, fx2, fy2 = map(int, best_box)
+        face_crop = person_crop[max(0,fy1):fy2, max(0,fx1):fx2]
+        if face_crop.size == 0:
+            return None
+        return face_crop
+    except Exception:
         return None
 
 def recognize_face_in_crop(crop):
@@ -105,6 +135,39 @@ def check_crowd(person_count):
         add_event("CROWD_ALERT", None, f"{person_count} people detected in frame")
         print(f"[CROWD ALERT] {person_count} people detected at {time.strftime('%H:%M:%S')}")
 
+def run_recognition_async(track_id, person_crop):
+    """Runs in a background thread — does NOT block the video loop."""
+    try:
+        face_crop = get_tight_face_crop(person_crop)
+        target = face_crop if face_crop is not None else person_crop
+
+        photo_folder = recognize_face_in_crop(target)
+        if photo_folder:
+            student_info = lookup_student(photo_folder)
+            label = student_info if student_info else photo_folder
+        else:
+            label = "Unknown"
+
+        if track_id in known_track_ids:
+            known_track_ids[track_id]["label"] = label
+            known_track_ids[track_id]["status"] = "done"
+            add_event("ENTRY", track_id, label)
+            print(f"[ENTRY] Track ID {track_id}: {label}")
+    finally:
+        with recognition_results_lock:
+            recognition_in_progress.discard(track_id)
+
+def update_latest_frame(frame):
+    global latest_frame
+    ok, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    if ok:
+        with frame_lock:
+            latest_frame = buffer.tobytes()
+
+def get_latest_frame():
+    with frame_lock:
+        return latest_frame
+
 def run_tracking_loop():
     global current_person_count
     cap = cv2.VideoCapture(0)
@@ -134,24 +197,26 @@ def run_tracking_loop():
                 current_frame_ids.add(track_id)
 
                 if track_id not in known_track_ids:
-                    person_crop = frame[max(0,y1):y2, max(0,x1):x2]
-                    photo_folder = recognize_face_in_crop(person_crop)
-
-                    if photo_folder:
-                        student_info = lookup_student(photo_folder)
-                        label = student_info if student_info else photo_folder
-                    else:
-                        label = "Unknown"
-
                     known_track_ids[track_id] = {
-                        "label": label,
+                        "label": "Identifying...",
                         "entry_time": time.time(),
-                        "last_seen": time.time()
+                        "last_seen": time.time(),
+                        "status": "pending"
                     }
-                    add_event("ENTRY", track_id, label)
-                    print(f"[ENTRY] Track ID {track_id}: {label}")
+                    with recognition_results_lock:
+                        if track_id not in recognition_in_progress:
+                            recognition_in_progress.add(track_id)
+                            person_crop = frame[max(0,y1):y2, max(0,x1):x2].copy()
+                            recognition_executor.submit(run_recognition_async, track_id, person_crop)
                 else:
                     known_track_ids[track_id]["last_seen"] = time.time()
+
+                label_text = known_track_ids[track_id]["label"]
+                box_color = (0, 200, 0) if label_text not in ("Unknown", "Identifying...") else \
+                            (0, 165, 255) if label_text == "Identifying..." else (0, 0, 220)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+                cv2.putText(frame, f"ID {track_id}: {label_text}", (x1, max(y1-10, 15)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, box_color, 2)
         else:
             current_person_count = 0
 
@@ -163,9 +228,12 @@ def run_tracking_loop():
 
         for track_id in exited_ids:
             label = known_track_ids[track_id]["label"]
-            add_event("EXIT", track_id, label)
-            print(f"[EXIT] Track ID {track_id}: {label}")
+            if label != "Identifying...":
+                add_event("EXIT", track_id, label)
+                print(f"[EXIT] Track ID {track_id}: {label}")
             del known_track_ids[track_id]
+
+        update_latest_frame(frame)
 
     cap.release()
 

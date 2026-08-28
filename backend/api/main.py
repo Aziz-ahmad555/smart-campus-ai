@@ -1,6 +1,8 @@
-import asyncio
+﻿import asyncio
+import time
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from backend.tracking import engine
 
 app = FastAPI(title="Smart Campus AI API")
@@ -31,6 +33,21 @@ def get_events():
     with engine.events_lock:
         return {"events": list(engine.events_log)}
 
+def mjpeg_generator():
+    while True:
+        frame = engine.get_latest_frame()
+        if frame is not None:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        time.sleep(0.05)  # ~20 fps stream rate
+
+@app.get("/video-feed")
+def video_feed():
+    return StreamingResponse(
+        mjpeg_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
 @app.websocket("/ws/events")
 async def websocket_events(websocket: WebSocket):
     await websocket.accept()
@@ -38,7 +55,7 @@ async def websocket_events(websocket: WebSocket):
     print(f"WebSocket client connected. Total clients: {len(engine.connected_websockets)}")
     try:
         while True:
-            await websocket.receive_text()  # keep connection alive, ignore incoming messages
+            await websocket.receive_text()
     except WebSocketDisconnect:
         engine.connected_websockets.remove(websocket)
         print(f"WebSocket client disconnected. Total clients: {len(engine.connected_websockets)}")
