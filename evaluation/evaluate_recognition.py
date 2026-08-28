@@ -1,4 +1,4 @@
-import os
+﻿import os
 import time
 import csv
 from deepface import DeepFace
@@ -15,27 +15,40 @@ CATEGORY_EXPECTATIONS = {
     "unknown_person": "Unknown",
 }
 
+def try_recognize(image_path, detector_backend):
+    results = DeepFace.find(
+        img_path=image_path,
+        db_path=KNOWN_FACES_DB,
+        enforce_detection=True,
+        silent=True,
+        detector_backend=detector_backend,
+        align=True,
+        model_name="Facenet512"
+    )
+    if len(results) > 0 and len(results[0]) > 0:
+        best_match_path = results[0].iloc[0]["identity"]
+        photo_folder = os.path.basename(os.path.dirname(best_match_path))
+        return photo_folder
+    return "Unknown"
+
 def recognize_image(image_path):
     start_time = time.time()
+    detector_used = "mtcnn"
     try:
-        results = DeepFace.find(
-            img_path=image_path,
-            db_path=KNOWN_FACES_DB,
-            enforce_detection=False,
-            silent=True,
-            detector_backend="opencv"
-        )
+        # Primary attempt: MTCNN
+        result = try_recognize(image_path, "mtcnn")
         elapsed = time.time() - start_time
-
-        if len(results) > 0 and len(results[0]) > 0:
-            best_match_path = results[0].iloc[0]["identity"]
-            photo_folder = os.path.basename(os.path.dirname(best_match_path))
-            return photo_folder, elapsed
-        else:
-            return "Unknown", elapsed
-    except Exception as e:
-        elapsed = time.time() - start_time
-        return f"ERROR: {e}", elapsed
+        return result, elapsed, detector_used
+    except Exception:
+        # Fallback: RetinaFace, if MTCNN fails to detect any face at all
+        try:
+            detector_used = "retinaface (fallback)"
+            result = try_recognize(image_path, "retinaface")
+            elapsed = time.time() - start_time
+            return result, elapsed, detector_used
+        except Exception as e2:
+            elapsed = time.time() - start_time
+            return "Unknown", elapsed, f"failed: {e2}"
 
 def main():
     os.makedirs("evaluation", exist_ok=True)
@@ -52,10 +65,10 @@ def main():
 
         for image_file in image_files:
             image_path = os.path.join(folder_path, image_file)
-            predicted, elapsed = recognize_image(image_path)
+            predicted, elapsed, detector_used = recognize_image(image_path)
             is_correct = (predicted == expected)
 
-            print(f"{image_file}: predicted='{predicted}', expected='{expected}', correct={is_correct}, time={elapsed:.2f}s")
+            print(f"{image_file}: predicted='{predicted}', expected='{expected}', correct={is_correct}, time={elapsed:.2f}s, detector={detector_used}")
 
             rows.append({
                 "category": category,
@@ -63,11 +76,12 @@ def main():
                 "expected": expected,
                 "predicted": predicted,
                 "correct": is_correct,
-                "time_seconds": round(elapsed, 3)
+                "time_seconds": round(elapsed, 3),
+                "detector_used": detector_used
             })
 
     with open(RESULTS_CSV, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["category", "image_file", "expected", "predicted", "correct", "time_seconds"])
+        writer = csv.DictWriter(f, fieldnames=["category", "image_file", "expected", "predicted", "correct", "time_seconds", "detector_used"])
         writer.writeheader()
         writer.writerows(rows)
 
@@ -93,13 +107,16 @@ def main():
     frr = (false_rejections / len(genuine_rows) * 100) if genuine_rows else 0
     far = (false_acceptances / len(impostor_rows) * 100) if impostor_rows else 0
 
-    print(f"Genuine attempts (should recognize AzizAhmad): {len(genuine_rows)}")
+    print(f"Genuine attempts: {len(genuine_rows)}")
     print(f"False Rejections: {false_rejections}")
     print(f"False Rejection Rate (FRR): {frr:.1f}%")
     print()
-    print(f"Impostor attempts (should say Unknown): {len(impostor_rows)}")
+    print(f"Impostor attempts: {len(impostor_rows)}")
     print(f"False Acceptances: {false_acceptances}")
     print(f"False Acceptance Rate (FAR): {far:.1f}%")
+
+    fallback_count = sum(1 for r in rows if "fallback" in r["detector_used"])
+    print(f"\nRetinaFace fallback triggered: {fallback_count} times")
 
     overall_correct = sum(1 for r in rows if r["correct"])
     overall_total = len(rows)
