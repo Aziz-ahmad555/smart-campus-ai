@@ -5,6 +5,7 @@ import './index.css'
 import App from './App.jsx'
 import LandingPage from './components/LandingPage.jsx'
 import StudentsPage from './components/StudentsPage.jsx'
+import VisitorsPage from './components/VisitorsPage.jsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
@@ -13,6 +14,7 @@ createRoot(document.getElementById('root')).render(
         <Route path="/" element={<LandingPage />} />
         <Route path="/dashboard" element={<App />} />
         <Route path="/students" element={<StudentsPage />} />
+        <Route path="/visitors" element={<VisitorsPage />} />
       </Routes>
     </BrowserRouter>
   </StrictMode>,

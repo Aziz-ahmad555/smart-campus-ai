@@ -8,6 +8,7 @@ function Sidebar({ darkMode, setDarkMode }) {
   const navItems = [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'Students', icon: Users, path: '/students' },
+    { label: 'Visitors', icon: Users, path: '/visitors' },
     { label: 'Alerts', icon: AlertTriangle, path: '/dashboard' },
     { label: 'Analytics', icon: Activity, path: '/dashboard' },
   ]
@@ -58,3 +59,4 @@ function Sidebar({ darkMode, setDarkMode }) {
 }
 
 export default Sidebar
+

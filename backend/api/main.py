@@ -1,9 +1,11 @@
 ﻿import asyncio
 import time
+from datetime import datetime, timedelta
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from typing import Optional
 import psycopg2
 import psycopg2.extras
 import os
@@ -40,6 +42,13 @@ class StudentUpdate(BaseModel):
     name: str
     roll_number: str
     photo_folder: str
+
+class VisitorCreate(BaseModel):
+    name: str
+    cnic_or_id: Optional[str] = None
+    reason: Optional[str] = None
+    host_name: Optional[str] = None
+    allowed_minutes: int = 60
 
 @app.on_event("startup")
 def startup_event():
@@ -84,7 +93,7 @@ async def websocket_events(websocket: WebSocket):
     except WebSocketDisconnect:
         engine.connected_websockets.remove(websocket)
 
-# ---- Student CRUD endpoints ----
+# ---- Student CRUD ----
 
 @app.get("/students")
 def list_students():
@@ -142,4 +151,70 @@ def delete_student(student_id: int):
     conn.close()
     if not deleted:
         raise HTTPException(status_code=404, detail="Student not found")
+    return {"deleted": True}
+
+# ---- Visitor Management ----
+
+def compute_visitor_status(row):
+    if row["check_out_time"] is not None:
+        return "checked_out"
+    expiry = row["check_in_time"] + timedelta(minutes=row["allowed_minutes"])
+    if datetime.now() > expiry:
+        return "overstayed"
+    return "checked_in"
+
+@app.get("/visitors")
+def list_visitors():
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM visitors ORDER BY check_in_time DESC;")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    for row in rows:
+        row["status"] = compute_visitor_status(row)
+        row["expiry_time"] = row["check_in_time"] + timedelta(minutes=row["allowed_minutes"])
+    return {"visitors": rows}
+
+@app.post("/visitors")
+def check_in_visitor(visitor: VisitorCreate):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        "INSERT INTO visitors (name, cnic_or_id, reason, host_name, allowed_minutes) VALUES (%s, %s, %s, %s, %s) RETURNING *;",
+        (visitor.name, visitor.cnic_or_id, visitor.reason, visitor.host_name, visitor.allowed_minutes)
+    )
+    new_visitor = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"visitor": new_visitor}
+
+@app.put("/visitors/{visitor_id}/checkout")
+def check_out_visitor(visitor_id: int):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        "UPDATE visitors SET check_out_time = CURRENT_TIMESTAMP, status = 'checked_out' WHERE id = %s RETURNING *;",
+        (visitor_id,)
+    )
+    updated = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    if not updated:
+        raise HTTPException(status_code=404, detail="Visitor not found")
+    return {"visitor": updated}
+
+@app.delete("/visitors/{visitor_id}")
+def delete_visitor(visitor_id: int):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM visitors WHERE id = %s RETURNING id;", (visitor_id,))
+    deleted = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Visitor not found")
     return {"deleted": True}
