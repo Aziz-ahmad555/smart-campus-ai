@@ -3,6 +3,8 @@ import cv2
 import time
 import threading
 import asyncio
+import numpy as np
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 import psycopg2
 from dotenv import load_dotenv
@@ -15,11 +17,15 @@ KNOWN_FACES_DB = "data/known_faces"
 EXIT_TIMEOUT_SECONDS = 5
 CROWD_THRESHOLD = 3
 CROWD_ALERT_COOLDOWN = 10
+FACE_DETECTION_MIN_CONFIDENCE = 0.55
+MATCH_SIMILARITY_THRESHOLD = 0.62
+VOTE_SAMPLE_COUNT = 3       # how many frames to sample before deciding
+VOTE_SAMPLE_INTERVAL = 0.35 # seconds between samples
 
 person_model = YOLO("yolov8n.pt")
 face_model = YOLO("backend/detection/models/yolov8n-face.pt")
 
-known_track_ids = {}  # track_id -> {label, entry_time, last_seen, status}
+known_track_ids = {}
 events_log = []
 events_lock = threading.Lock()
 
@@ -35,6 +41,12 @@ frame_lock = threading.Lock()
 recognition_executor = ThreadPoolExecutor(max_workers=2)
 recognition_in_progress = set()
 recognition_results_lock = threading.Lock()
+
+reference_embeddings = []
+
+# Buffers of pending crops per track_id, collected across multiple frames before voting
+pending_samples = {}
+pending_samples_lock = threading.Lock()
 
 def get_db_connection():
     return psycopg2.connect(
@@ -64,42 +76,87 @@ def lookup_student(photo_folder):
         print("DB lookup error:", e)
         return None
 
+def build_reference_embeddings():
+    global reference_embeddings
+    reference_embeddings = []
+    if not os.path.isdir(KNOWN_FACES_DB):
+        return
+    for identity_folder in os.listdir(KNOWN_FACES_DB):
+        folder_path = os.path.join(KNOWN_FACES_DB, identity_folder)
+        if not os.path.isdir(folder_path):
+            continue
+        for photo_file in os.listdir(folder_path):
+            if not photo_file.lower().endswith(('.jpg', '.jpeg', '.png')):
+                continue
+            photo_path = os.path.join(folder_path, photo_file)
+            try:
+                embedding_objs = DeepFace.represent(
+                    img_path=photo_path,
+                    model_name="Facenet512",
+                    detector_backend="mtcnn",
+                    align=True,
+                    enforce_detection=True
+                )
+                for obj in embedding_objs:
+                    vec = np.array(obj["embedding"])
+                    reference_embeddings.append((identity_folder, vec))
+            except Exception as e:
+                print(f"Skipping {photo_path}: could not embed ({e})")
+    print(f"Reference embeddings built: {len(reference_embeddings)} vectors across "
+          f"{len(set(f for f, _ in reference_embeddings))} identities.")
+
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
 def get_tight_face_crop(person_crop):
-    """Run face detection WITHIN the person crop to isolate just the face region."""
     if person_crop.size == 0:
         return None
     try:
         face_results = face_model(person_crop, verbose=False)
         boxes = face_results[0].boxes.xyxy.cpu().numpy()
+        confs = face_results[0].boxes.conf.cpu().numpy()
         if len(boxes) == 0:
             return None
-        # Take the largest face box (most prominent face in this person's crop)
-        areas = [(b[2]-b[0]) * (b[3]-b[1]) for b in boxes]
-        best_box = boxes[areas.index(max(areas))]
-        fx1, fy1, fx2, fy2 = map(int, best_box)
+        best_idx = confs.argmax()
+        if confs[best_idx] < FACE_DETECTION_MIN_CONFIDENCE:
+            return None
+        fx1, fy1, fx2, fy2 = map(int, boxes[best_idx])
         face_crop = person_crop[max(0,fy1):fy2, max(0,fx1):fx2]
-        if face_crop.size == 0:
+        if face_crop.size == 0 or face_crop.shape[0] < 40 or face_crop.shape[1] < 40:
             return None
         return face_crop
     except Exception:
         return None
 
-def recognize_face_in_crop(crop):
+def match_single_frame(face_crop):
+    """Returns (identity_or_None, score) for ONE frame's face crop."""
+    if not reference_embeddings:
+        return None, 0
     try:
-        results = DeepFace.find(
-            img_path=crop,
-            db_path=KNOWN_FACES_DB,
-            enforce_detection=False,
-            silent=True,
-            detector_backend="opencv"
+        embedding_objs = DeepFace.represent(
+            img_path=face_crop,
+            model_name="Facenet512",
+            detector_backend="skip",
+            align=True,
+            enforce_detection=False
         )
-        if len(results) > 0 and len(results[0]) > 0:
-            best_match_path = results[0].iloc[0]["identity"]
-            photo_folder = os.path.basename(os.path.dirname(best_match_path))
-            return photo_folder
-        return None
+        if not embedding_objs:
+            return None, 0
+        live_vec = np.array(embedding_objs[0]["embedding"])
+
+        best_identity = None
+        best_score = -1
+        for identity_folder, ref_vec in reference_embeddings:
+            score = cosine_similarity(live_vec, ref_vec)
+            if score > best_score:
+                best_score = score
+                best_identity = identity_folder
+
+        if best_score >= MATCH_SIMILARITY_THRESHOLD:
+            return best_identity, best_score
+        return None, best_score
     except Exception:
-        return None
+        return None, 0
 
 def broadcast_event(event):
     if main_event_loop is None:
@@ -135,16 +192,32 @@ def check_crowd(person_count):
         add_event("CROWD_ALERT", None, f"{person_count} people detected in frame")
         print(f"[CROWD ALERT] {person_count} people detected at {time.strftime('%H:%M:%S')}")
 
-def run_recognition_async(track_id, person_crop):
-    """Runs in a background thread — does NOT block the video loop."""
+def run_voting_recognition(track_id):
+    """Collects VOTE_SAMPLE_COUNT face crops over time, then decides by majority vote."""
     try:
-        face_crop = get_tight_face_crop(person_crop)
-        target = face_crop if face_crop is not None else person_crop
+        votes = []
+        scores = []
+        for _ in range(VOTE_SAMPLE_COUNT):
+            with pending_samples_lock:
+                crop = pending_samples.get(track_id)
+            if crop is not None:
+                face_crop = get_tight_face_crop(crop)
+                if face_crop is not None:
+                    identity, score = match_single_frame(face_crop)
+                    votes.append(identity)  # None counts as "Unknown" vote
+                    scores.append(score)
+            time.sleep(VOTE_SAMPLE_INTERVAL)
 
-        photo_folder = recognize_face_in_crop(target)
-        if photo_folder:
-            student_info = lookup_student(photo_folder)
-            label = student_info if student_info else photo_folder
+        # Majority vote among the collected samples
+        vote_counts = Counter(votes)
+        if vote_counts:
+            winner, count = vote_counts.most_common(1)[0]
+            if winner is not None and count >= 2:  # at least 2 of 3 must agree
+                photo_folder = winner
+                student_info = lookup_student(photo_folder)
+                label = student_info if student_info else photo_folder
+            else:
+                label = "Unknown"
         else:
             label = "Unknown"
 
@@ -152,10 +225,12 @@ def run_recognition_async(track_id, person_crop):
             known_track_ids[track_id]["label"] = label
             known_track_ids[track_id]["status"] = "done"
             add_event("ENTRY", track_id, label)
-            print(f"[ENTRY] Track ID {track_id}: {label}")
+            print(f"[ENTRY] Track ID {track_id}: {label} (votes={votes}, scores={[round(s,3) for s in scores]})")
     finally:
         with recognition_results_lock:
             recognition_in_progress.discard(track_id)
+        with pending_samples_lock:
+            pending_samples.pop(track_id, None)
 
 def update_latest_frame(frame):
     global latest_frame
@@ -195,6 +270,7 @@ def run_tracking_loop():
             for box, track_id in zip(boxes, track_ids):
                 x1, y1, x2, y2 = map(int, box)
                 current_frame_ids.add(track_id)
+                person_crop = frame[max(0,y1):y2, max(0,x1):x2].copy()
 
                 if track_id not in known_track_ids:
                     known_track_ids[track_id] = {
@@ -203,17 +279,26 @@ def run_tracking_loop():
                         "last_seen": time.time(),
                         "status": "pending"
                     }
+                    with pending_samples_lock:
+                        pending_samples[track_id] = person_crop
                     with recognition_results_lock:
                         if track_id not in recognition_in_progress:
                             recognition_in_progress.add(track_id)
-                            person_crop = frame[max(0,y1):y2, max(0,x1):x2].copy()
-                            recognition_executor.submit(run_recognition_async, track_id, person_crop)
+                            recognition_executor.submit(run_voting_recognition, track_id)
                 else:
                     known_track_ids[track_id]["last_seen"] = time.time()
+                    # Keep updating the pending sample with the freshest crop while voting is in progress
+                    with pending_samples_lock:
+                        if track_id in pending_samples:
+                            pending_samples[track_id] = person_crop
 
                 label_text = known_track_ids[track_id]["label"]
-                box_color = (0, 200, 0) if label_text not in ("Unknown", "Identifying...") else \
-                            (0, 165, 255) if label_text == "Identifying..." else (0, 0, 220)
+                if label_text == "Identifying...":
+                    box_color = (0, 165, 255)
+                elif label_text == "Unknown":
+                    box_color = (0, 0, 220)
+                else:
+                    box_color = (0, 200, 0)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
                 cv2.putText(frame, f"ID {track_id}: {label_text}", (x1, max(y1-10, 15)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, box_color, 2)
@@ -238,5 +323,6 @@ def run_tracking_loop():
     cap.release()
 
 def start_background_tracking():
+    build_reference_embeddings()
     thread = threading.Thread(target=run_tracking_loop, daemon=True)
     thread.start()
