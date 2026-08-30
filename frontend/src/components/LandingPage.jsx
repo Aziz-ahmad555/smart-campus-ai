@@ -49,7 +49,7 @@ function LandingPage() {
           A full-stack AI perception system combining YOLOv8 detection, DeepFace recognition,
           and real-time tracking to identify, log, and monitor campus access — end to end.
         </p>
-        <button onClick={() => navigate('/dashboard')} className="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-white text-slate-950 font-semibold hover:bg-slate-200 transition-colors">
+        <button onClick={() => navigate('/login')} className="inline-flex items-center gap-2 px-6 py-3 rounded-lg bg-white text-slate-950 font-semibold hover:bg-slate-200 transition-colors">
           Launch Live Dashboard
           <ArrowRight size={18} />
         </button>
@@ -99,3 +99,4 @@ function LandingPage() {
 }
 
 export default LandingPage
+

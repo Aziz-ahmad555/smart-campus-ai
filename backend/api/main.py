@@ -336,3 +336,58 @@ def delete_staff(staff_id: int):
 
 
 
+
+# ---- Authentication ----
+
+import bcrypt
+import secrets
+
+active_sessions = {}  # token -> {user_id, username, role, full_name}
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+@app.post("/login")
+def login(credentials: LoginRequest):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM users WHERE username = %s;", (credentials.username,))
+    user = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    if not bcrypt.checkpw(credentials.password.encode("utf-8"), user["password_hash"].encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    token = secrets.token_hex(32)
+    active_sessions[token] = {
+        "user_id": user["id"],
+        "username": user["username"],
+        "role": user["role"],
+        "full_name": user["full_name"],
+    }
+
+    return {
+        "token": token,
+        "user": {
+            "username": user["username"],
+            "role": user["role"],
+            "full_name": user["full_name"],
+        }
+    }
+
+@app.get("/me")
+def get_current_user(token: str):
+    session = active_sessions.get(token)
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    return {"user": session}
+
+@app.post("/logout")
+def logout(token: str):
+    active_sessions.pop(token, None)
+    return {"logged_out": True}

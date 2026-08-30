@@ -8,17 +8,20 @@ import StudentsPage from './components/StudentsPage.jsx'
 import VisitorsPage from './components/VisitorsPage.jsx'
 import StaffPage from './components/StaffPage.jsx'
 import ClassesPage from './components/ClassesPage.jsx'
+import LoginPage from './components/LoginPage.jsx'
+import ProtectedRoute from './components/ProtectedRoute.jsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<LandingPage />} />
-        <Route path="/dashboard" element={<App />} />
-        <Route path="/students" element={<StudentsPage />} />
-        <Route path="/visitors" element={<VisitorsPage />} />
-        <Route path="/staff" element={<StaffPage />} />
-        <Route path="/classes" element={<ClassesPage />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/dashboard" element={<ProtectedRoute><App /></ProtectedRoute>} />
+        <Route path="/students" element={<ProtectedRoute><StudentsPage /></ProtectedRoute>} />
+        <Route path="/visitors" element={<ProtectedRoute><VisitorsPage /></ProtectedRoute>} />
+        <Route path="/staff" element={<ProtectedRoute><StaffPage /></ProtectedRoute>} />
+        <Route path="/classes" element={<ProtectedRoute><ClassesPage /></ProtectedRoute>} />
       </Routes>
     </BrowserRouter>
   </StrictMode>,
