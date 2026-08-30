@@ -1,9 +1,12 @@
-﻿import { LayoutDashboard, Users, AlertTriangle, Activity, Moon, Sun } from 'lucide-react'
+﻿import { LayoutDashboard, Users, AlertTriangle, Activity, Moon, Sun, LogOut } from 'lucide-react'
 import { useNavigate, useLocation } from 'react-router-dom'
 
 function Sidebar({ darkMode, setDarkMode }) {
   const navigate = useNavigate()
   const location = useLocation()
+
+  const userJson = localStorage.getItem('sentra_user')
+  const user = userJson ? JSON.parse(userJson) : null
 
   const navItems = [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
@@ -14,6 +17,18 @@ function Sidebar({ darkMode, setDarkMode }) {
     { label: 'Alerts', icon: AlertTriangle, path: '/dashboard' },
     { label: 'Analytics', icon: Activity, path: '/dashboard' },
   ]
+
+  const handleLogout = async () => {
+    const token = localStorage.getItem('sentra_token')
+    try {
+      await fetch('http://localhost:8000/logout?token=' + token, { method: 'POST' })
+    } catch (e) {
+      // ignore network errors on logout
+    }
+    localStorage.removeItem('sentra_token')
+    localStorage.removeItem('sentra_user')
+    navigate('/login')
+  }
 
   return (
     <div className="w-64 h-screen bg-slate-900 text-slate-100 flex flex-col fixed left-0 top-0">
@@ -47,7 +62,13 @@ function Sidebar({ darkMode, setDarkMode }) {
         })}
       </nav>
 
-      <div className="p-4 border-t border-slate-800">
+      <div className="p-4 border-t border-slate-800 space-y-1">
+        {user && (
+          <div className="px-4 py-2 mb-1">
+            <p className="text-sm text-white font-medium">{user.full_name || user.username}</p>
+            <p className="text-xs text-slate-500 capitalize">{user.role}</p>
+          </div>
+        )}
         <button
           onClick={() => setDarkMode(!darkMode)}
           className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition-colors text-sm"
@@ -55,12 +76,16 @@ function Sidebar({ darkMode, setDarkMode }) {
           {darkMode ? <Sun size={18} /> : <Moon size={18} />}
           {darkMode ? 'Light Mode' : 'Dark Mode'}
         </button>
+        <button
+          onClick={handleLogout}
+          className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-slate-400 hover:bg-rose-900/30 hover:text-rose-400 transition-colors text-sm"
+        >
+          <LogOut size={18} />
+          Log Out
+        </button>
       </div>
     </div>
   )
 }
 
 export default Sidebar
-
-
-
