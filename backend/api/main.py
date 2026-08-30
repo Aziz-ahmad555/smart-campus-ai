@@ -218,3 +218,114 @@ def delete_visitor(visitor_id: int):
     if not deleted:
         raise HTTPException(status_code=404, detail="Visitor not found")
     return {"deleted": True}
+
+# ---- Classes ----
+
+class ClassCreate(BaseModel):
+    name: str
+    grade_level: Optional[str] = None
+    section: Optional[str] = None
+
+@app.get("/classes")
+def list_classes():
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM classes ORDER BY id;")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return {"classes": rows}
+
+@app.post("/classes")
+def create_class(cls: ClassCreate):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        "INSERT INTO classes (name, grade_level, section) VALUES (%s, %s, %s) RETURNING *;",
+        (cls.name, cls.grade_level, cls.section)
+    )
+    new_class = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"class": new_class}
+
+@app.delete("/classes/{class_id}")
+def delete_class(class_id: int):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM classes WHERE id = %s RETURNING id;", (class_id,))
+    deleted = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Class not found")
+    return {"deleted": True}
+
+# ---- Staff ----
+
+class StaffCreate(BaseModel):
+    name: str
+    role: str
+    department: Optional[str] = None
+    photo_folder: str
+
+class StaffUpdate(BaseModel):
+    name: str
+    role: str
+    department: Optional[str] = None
+    photo_folder: str
+
+@app.get("/staff")
+def list_staff():
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM staff ORDER BY id;")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return {"staff": rows}
+
+@app.post("/staff")
+def create_staff(person: StaffCreate):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        "INSERT INTO staff (name, role, department, photo_folder) VALUES (%s, %s, %s, %s) RETURNING *;",
+        (person.name, person.role, person.department, person.photo_folder)
+    )
+    new_staff = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"staff": new_staff}
+
+@app.put("/staff/{staff_id}")
+def update_staff(staff_id: int, person: StaffUpdate):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(
+        "UPDATE staff SET name = %s, role = %s, department = %s, photo_folder = %s WHERE id = %s RETURNING *;",
+        (person.name, person.role, person.department, person.photo_folder, staff_id)
+    )
+    updated = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    if not updated:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+    return {"staff": updated}
+
+@app.delete("/staff/{staff_id}")
+def delete_staff(staff_id: int):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM staff WHERE id = %s RETURNING id;", (staff_id,))
+    deleted = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+    return {"deleted": True}
