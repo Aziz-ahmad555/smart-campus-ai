@@ -4,10 +4,11 @@ import Sidebar from './Sidebar'
 
 function StudentsPage() {
   const [students, setStudents] = useState([])
+  const [classes, setClasses] = useState([])
   const [darkMode, setDarkMode] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
-  const [formData, setFormData] = useState({ name: '', roll_number: '', photo_folder: '' })
+  const [formData, setFormData] = useState({ name: '', roll_number: '', photo_folder: '', class_id: '' })
   const [error, setError] = useState(null)
 
   const fetchStudents = () => {
@@ -17,8 +18,16 @@ function StudentsPage() {
       .catch(() => setError('Could not load students.'))
   }
 
+  const fetchClasses = () => {
+    fetch('http://localhost:8000/classes')
+      .then((res) => res.json())
+      .then((data) => setClasses(data.classes))
+      .catch(() => {})
+  }
+
   useEffect(() => {
     fetchStudents()
+    fetchClasses()
   }, [])
 
   useEffect(() => {
@@ -27,7 +36,7 @@ function StudentsPage() {
   }, [darkMode])
 
   const resetForm = () => {
-    setFormData({ name: '', roll_number: '', photo_folder: '' })
+    setFormData({ name: '', roll_number: '', photo_folder: '', class_id: '' })
     setEditingId(null)
     setShowForm(false)
     setError(null)
@@ -35,7 +44,7 @@ function StudentsPage() {
 
   const handleSubmit = async () => {
     if (!formData.name || !formData.roll_number || !formData.photo_folder) {
-      setError('All fields are required.')
+      setError('Name, roll number, and photo folder are required.')
       return
     }
     const url = editingId
@@ -43,11 +52,16 @@ function StudentsPage() {
       : 'http://localhost:8000/students'
     const method = editingId ? 'PUT' : 'POST'
 
+    const payload = {
+      ...formData,
+      class_id: formData.class_id ? parseInt(formData.class_id) : null,
+    }
+
     try {
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData),
+        body: JSON.stringify(payload),
       })
       if (!res.ok) {
         const err = await res.json()
@@ -61,7 +75,12 @@ function StudentsPage() {
   }
 
   const handleEdit = (student) => {
-    setFormData({ name: student.name, roll_number: student.roll_number, photo_folder: student.photo_folder })
+    setFormData({
+      name: student.name,
+      roll_number: student.roll_number,
+      photo_folder: student.photo_folder,
+      class_id: student.class_id ? String(student.class_id) : '',
+    })
     setEditingId(student.id)
     setShowForm(true)
   }
@@ -108,7 +127,7 @@ function StudentsPage() {
             <h3 className="font-semibold text-slate-900 dark:text-white mb-4">
               {editingId ? 'Edit Student' : 'New Student'}
             </h3>
-            <div className="grid grid-cols-3 gap-4 mb-4">
+            <div className="grid grid-cols-4 gap-4 mb-4">
               <div>
                 <label className="text-xs text-slate-500 dark:text-slate-400 mb-1 block">Full Name</label>
                 <input
@@ -128,6 +147,19 @@ function StudentsPage() {
                   className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm"
                   placeholder="e.g. CS-002"
                 />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 dark:text-slate-400 mb-1 block">Class</label>
+                <select
+                  value={formData.class_id}
+                  onChange={(e) => setFormData({ ...formData, class_id: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-sm"
+                >
+                  <option value="">Unassigned</option>
+                  {classes.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="text-xs text-slate-500 dark:text-slate-400 mb-1 block">Photo Folder Name</label>
@@ -169,6 +201,7 @@ function StudentsPage() {
                 <th className="px-5 py-3 font-medium">ID</th>
                 <th className="px-5 py-3 font-medium">Name</th>
                 <th className="px-5 py-3 font-medium">Roll Number</th>
+                <th className="px-5 py-3 font-medium">Class</th>
                 <th className="px-5 py-3 font-medium">Photo Folder</th>
                 <th className="px-5 py-3 font-medium">Registered</th>
                 <th className="px-5 py-3 font-medium text-right">Actions</th>
@@ -177,7 +210,7 @@ function StudentsPage() {
             <tbody>
               {students.length === 0 && (
                 <tr>
-                  <td colSpan="6" className="px-5 py-8 text-center text-slate-400 text-sm">
+                  <td colSpan="7" className="px-5 py-8 text-center text-slate-400 text-sm">
                     No students registered yet.
                   </td>
                 </tr>
@@ -187,6 +220,7 @@ function StudentsPage() {
                   <td className="px-5 py-3 text-slate-500 dark:text-slate-400 font-mono text-xs">{s.id}</td>
                   <td className="px-5 py-3 text-slate-900 dark:text-white font-medium">{s.name}</td>
                   <td className="px-5 py-3 text-slate-600 dark:text-slate-300">{s.roll_number}</td>
+                  <td className="px-5 py-3 text-slate-600 dark:text-slate-300">{s.class_name || '—'}</td>
                   <td className="px-5 py-3 text-slate-600 dark:text-slate-300 font-mono text-xs">{s.photo_folder}</td>
                   <td className="px-5 py-3 text-slate-500 dark:text-slate-400 text-xs">{s.created_at}</td>
                   <td className="px-5 py-3 text-right">

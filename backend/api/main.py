@@ -37,11 +37,13 @@ class StudentCreate(BaseModel):
     name: str
     roll_number: str
     photo_folder: str
+    class_id: Optional[int] = None
 
 class StudentUpdate(BaseModel):
     name: str
     roll_number: str
     photo_folder: str
+    class_id: Optional[int] = None
 
 class VisitorCreate(BaseModel):
     name: str
@@ -99,7 +101,7 @@ async def websocket_events(websocket: WebSocket):
 def list_students():
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT id, name, roll_number, photo_folder, created_at FROM students ORDER BY id;")
+    cur.execute("SELECT s.id, s.name, s.roll_number, s.photo_folder, s.created_at, s.class_id, c.name AS class_name FROM students s LEFT JOIN classes c ON s.class_id = c.id ORDER BY s.id;")
     rows = cur.fetchall()
     cur.close()
     conn.close()
@@ -111,8 +113,8 @@ def create_student(student: StudentCreate):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
         cur.execute(
-            "INSERT INTO students (name, roll_number, photo_folder) VALUES (%s, %s, %s) RETURNING id, name, roll_number, photo_folder, created_at;",
-            (student.name, student.roll_number, student.photo_folder)
+            "INSERT INTO students (name, roll_number, photo_folder, class_id) VALUES (%s, %s, %s, %s) RETURNING id, name, roll_number, photo_folder, created_at, class_id;",
+            (student.name, student.roll_number, student.photo_folder, student.class_id)
         )
         new_student = cur.fetchone()
         conn.commit()
@@ -129,8 +131,8 @@ def update_student(student_id: int, student: StudentUpdate):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
-        "UPDATE students SET name = %s, roll_number = %s, photo_folder = %s WHERE id = %s RETURNING id, name, roll_number, photo_folder, created_at;",
-        (student.name, student.roll_number, student.photo_folder, student_id)
+        "UPDATE students SET name = %s, roll_number = %s, photo_folder = %s, class_id = %s WHERE id = %s RETURNING id, name, roll_number, photo_folder, created_at, class_id;",
+        (student.name, student.roll_number, student.photo_folder, student.class_id, student_id)
     )
     updated = cur.fetchone()
     conn.commit()
@@ -329,3 +331,8 @@ def delete_staff(staff_id: int):
     if not deleted:
         raise HTTPException(status_code=404, detail="Staff member not found")
     return {"deleted": True}
+
+
+
+
+
