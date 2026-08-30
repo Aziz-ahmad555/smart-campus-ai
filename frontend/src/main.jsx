@@ -10,6 +10,7 @@ import StaffPage from './components/StaffPage.jsx'
 import ClassesPage from './components/ClassesPage.jsx'
 import LoginPage from './components/LoginPage.jsx'
 import ProtectedRoute from './components/ProtectedRoute.jsx'
+import MyProfilePage from './components/MyProfilePage.jsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
@@ -22,7 +23,10 @@ createRoot(document.getElementById('root')).render(
         <Route path="/visitors" element={<ProtectedRoute><VisitorsPage /></ProtectedRoute>} />
         <Route path="/staff" element={<ProtectedRoute><StaffPage /></ProtectedRoute>} />
         <Route path="/classes" element={<ProtectedRoute><ClassesPage /></ProtectedRoute>} />
+        <Route path="/my-profile" element={<ProtectedRoute><MyProfilePage /></ProtectedRoute>} />
       </Routes>
     </BrowserRouter>
   </StrictMode>,
 )
+
+

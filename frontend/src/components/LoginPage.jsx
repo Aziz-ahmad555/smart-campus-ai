@@ -26,7 +26,7 @@ function LoginPage() {
       const data = await res.json()
       localStorage.setItem('sentra_token', data.token)
       localStorage.setItem('sentra_user', JSON.stringify(data.user))
-      navigate('/dashboard')
+      if (data.user.role === 'admin') { navigate('/dashboard') } else if (data.user.role === 'teacher') { navigate('/my-class') } else { navigate('/my-profile') }
     } catch (err) {
       setError(err.message)
     } finally {
@@ -95,3 +95,4 @@ function LoginPage() {
 }
 
 export default LoginPage
+
