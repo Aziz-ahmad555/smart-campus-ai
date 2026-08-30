@@ -391,3 +391,31 @@ def get_current_user(token: str):
 def logout(token: str):
     active_sessions.pop(token, None)
     return {"logged_out": True}
+
+# ---- Teacher class roster ----
+
+@app.get("/my-class-roster")
+def get_class_roster(teacher_name: str):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    cur.execute("SELECT class_id FROM staff WHERE name = %s;", (teacher_name,))
+    teacher_row = cur.fetchone()
+
+    if not teacher_row or not teacher_row["class_id"]:
+        cur.close()
+        conn.close()
+        return {"class_name": None, "students": []}
+
+    class_id = teacher_row["class_id"]
+
+    cur.execute("SELECT name FROM classes WHERE id = %s;", (class_id,))
+    class_row = cur.fetchone()
+
+    cur.execute("SELECT id, name, roll_number, photo_folder FROM students WHERE class_id = %s ORDER BY name;", (class_id,))
+    students = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return {"class_name": class_row["name"] if class_row else None, "students": students}
