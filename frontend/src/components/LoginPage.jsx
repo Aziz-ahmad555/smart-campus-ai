@@ -1,6 +1,7 @@
 ﻿import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LogIn } from 'lucide-react'
+import { LogIn, Fingerprint } from 'lucide-react'
+import { startAuthentication } from '@simplewebauthn/browser'
 
 function LoginPage() {
   const navigate = useNavigate()
@@ -8,6 +9,12 @@ function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
+
+  const redirectByRole = (role) => {
+    if (role === 'admin') navigate('/dashboard')
+    else if (role === 'teacher') navigate('/my-class')
+    else navigate('/my-profile')
+  }
 
   const handleLogin = async (e) => {
     e.preventDefault()
@@ -26,7 +33,45 @@ function LoginPage() {
       const data = await res.json()
       localStorage.setItem('sentra_token', data.token)
       localStorage.setItem('sentra_user', JSON.stringify(data.user))
-      if (data.user.role === 'admin') { navigate('/dashboard') } else if (data.user.role === 'teacher') { navigate('/my-class') } else { navigate('/my-profile') }
+      redirectByRole(data.user.role)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleFingerprintLogin = async () => {
+    if (!username) {
+      setError('Enter your username first, then tap "Sign in with Fingerprint".')
+      return
+    }
+    setError(null)
+    setLoading(true)
+    try {
+      const beginRes = await fetch('http://localhost:8000/webauthn/login/begin?username=' + encodeURIComponent(username), { method: 'POST' })
+      if (!beginRes.ok) {
+        const err = await beginRes.json()
+        throw new Error(err.detail || 'No fingerprint registered for this user')
+      }
+      const beginData = await beginRes.json()
+      const options = JSON.parse(beginData.options)
+
+      const credential = await startAuthentication({ optionsJSON: options })
+
+      const completeRes = await fetch('http://localhost:8000/webauthn/login/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, credential }),
+      })
+      if (!completeRes.ok) {
+        const err = await completeRes.json()
+        throw new Error(err.detail || 'Fingerprint authentication failed')
+      }
+      const data = await completeRes.json()
+      localStorage.setItem('sentra_token', data.token)
+      localStorage.setItem('sentra_user', JSON.stringify(data.user))
+      redirectByRole(data.user.role)
     } catch (err) {
       setError(err.message)
     } finally {
@@ -68,7 +113,7 @@ function LoginPage() {
             />
           </div>
 
-          <div className="mb-6">
+          <div className="mb-4">
             <label className="text-xs text-slate-400 mb-1 block">Password</label>
             <input
               type="password"
@@ -83,10 +128,26 @@ function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white text-slate-950 font-semibold text-sm hover:bg-slate-200 transition-colors disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white text-slate-950 font-semibold text-sm hover:bg-slate-200 transition-colors disabled:opacity-50 mb-3"
           >
             <LogIn size={16} />
             {loading ? 'Signing in...' : 'Sign in'}
+          </button>
+
+          <div className="flex items-center gap-2 my-3">
+            <div className="flex-1 h-px bg-slate-800"></div>
+            <span className="text-xs text-slate-500">OR</span>
+            <div className="flex-1 h-px bg-slate-800"></div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleFingerprintLogin}
+            disabled={loading}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-slate-800 text-white font-semibold text-sm hover:bg-slate-700 transition-colors disabled:opacity-50"
+          >
+            <Fingerprint size={16} />
+            Sign in with Fingerprint
           </button>
         </form>
       </div>
@@ -95,4 +156,3 @@ function LoginPage() {
 }
 
 export default LoginPage
-

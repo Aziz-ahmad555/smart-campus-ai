@@ -1,5 +1,6 @@
-﻿import { LayoutDashboard, Users, AlertTriangle, Activity, Moon, Sun, LogOut } from 'lucide-react'
+﻿import { LayoutDashboard, Users, AlertTriangle, Activity, Moon, Sun, LogOut, ScanFace } from 'lucide-react'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { startRegistration } from '@simplewebauthn/browser'
 
 function Sidebar({ darkMode, setDarkMode }) {
   const navigate = useNavigate()
@@ -22,16 +23,37 @@ function Sidebar({ darkMode, setDarkMode }) {
     const token = localStorage.getItem('sentra_token')
     try {
       await fetch('http://localhost:8000/logout?token=' + token, { method: 'POST' })
-    } catch (e) {
-      // ignore network errors on logout
-    }
+    } catch (e) {}
     localStorage.removeItem('sentra_token')
     localStorage.removeItem('sentra_user')
     navigate('/login')
   }
 
+  const handleRegisterScanFace = async () => {
+    const token = localStorage.getItem('sentra_token')
+    try {
+      const beginRes = await fetch('http://localhost:8000/webauthn/register/begin?token=' + token, { method: 'POST' })
+      if (!beginRes.ok) throw new Error('Could not start ScanFace registration')
+      const beginData = await beginRes.json()
+      const options = JSON.parse(beginData.options)
+
+      const credential = await startRegistration({ optionsJSON: options })
+
+      const completeRes = await fetch('http://localhost:8000/webauthn/register/complete?token=' + token, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential }),
+      })
+      if (!completeRes.ok) throw new Error('ScanFace registration failed')
+
+      alert('ScanFace registered successfully! You can now sign in using your ScanFace.')
+    } catch (e) {
+      alert('ScanFace registration failed: ' + e.message)
+    }
+  }
+
   return (
-    <div className="w-64 h-screen bg-slate-900 text-slate-100 flex flex-col fixed left-0 top-0">
+    <div className="w-64 h-screen bg-slate-900 text-slate-100 flex flex-col fixed left-0 top-0 overflow-y-auto">
       <div className="p-6 border-b border-slate-800">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-emerald-400 flex items-center justify-center font-bold text-white">
@@ -70,6 +92,13 @@ function Sidebar({ darkMode, setDarkMode }) {
           </div>
         )}
         <button
+          onClick={handleRegisterScanFace}
+          className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition-colors text-sm"
+        >
+          <ScanFace size={18} />
+          Register ScanFace
+        </button>
+        <button
           onClick={() => setDarkMode(!darkMode)}
           className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition-colors text-sm"
         >
@@ -89,3 +118,5 @@ function Sidebar({ darkMode, setDarkMode }) {
 }
 
 export default Sidebar
+
+

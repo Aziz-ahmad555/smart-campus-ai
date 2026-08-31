@@ -510,3 +510,184 @@ def require_admin(token: str):
 
 
 
+
+# ---- WebAuthn Fingerprint Authentication ----
+
+from webauthn import (
+    generate_registration_options,
+    verify_registration_response,
+    generate_authentication_options,
+    verify_authentication_response,
+    options_to_json,
+)
+from webauthn.helpers.structs import (
+    PublicKeyCredentialDescriptor,
+    AuthenticatorSelectionCriteria,
+    UserVerificationRequirement,
+)
+import base64
+
+RP_ID = "localhost"
+RP_NAME = "Sentra Campus Intelligence"
+ORIGIN = "http://localhost:5173"
+
+webauthn_challenges = {}  # temporary storage: token -> challenge bytes
+
+def b64_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
+
+def b64_decode(data: str) -> bytes:
+    padding = "=" * (-len(data) % 4)
+    return base64.urlsafe_b64decode(data + padding)
+
+@app.post("/webauthn/register/begin")
+def webauthn_register_begin(token: str):
+    session = active_sessions.get(token)
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    options = generate_registration_options(
+        rp_id=RP_ID,
+        rp_name=RP_NAME,
+        user_id=str(session["user_id"]).encode("utf-8"),
+        user_name=session["username"],
+        user_display_name=session["full_name"] or session["username"],
+        authenticator_selection=AuthenticatorSelectionCriteria(
+            user_verification=UserVerificationRequirement.REQUIRED,
+        ),
+    )
+
+    webauthn_challenges[token] = options.challenge
+    return {"options": options_to_json(options)}
+
+class RegisterCompleteRequest(BaseModel):
+    credential: dict
+
+@app.post("/webauthn/register/complete")
+def webauthn_register_complete(token: str, body: RegisterCompleteRequest):
+    session = active_sessions.get(token)
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    expected_challenge = webauthn_challenges.get(token)
+    if not expected_challenge:
+        raise HTTPException(status_code=400, detail="No pending registration challenge")
+
+    try:
+        verification = verify_registration_response(
+            credential=body.credential,
+            expected_challenge=expected_challenge,
+            expected_origin=ORIGIN,
+            expected_rp_id=RP_ID,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Registration verification failed: {e}")
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO webauthn_credentials (user_id, credential_id, public_key, sign_count) VALUES (%s, %s, %s, %s);",
+        (session["user_id"], verification.credential_id, verification.credential_public_key, verification.sign_count)
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    webauthn_challenges.pop(token, None)
+    return {"registered": True}
+
+@app.post("/webauthn/login/begin")
+def webauthn_login_begin(username: str):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT id FROM users WHERE username = %s;", (username,))
+    user = cur.fetchone()
+    if not user:
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="User not found")
+
+    cur.execute("SELECT credential_id FROM webauthn_credentials WHERE user_id = %s;", (user["id"],))
+    creds = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not creds:
+        raise HTTPException(status_code=400, detail="No fingerprint registered for this user")
+
+    allow_credentials = [
+        PublicKeyCredentialDescriptor(id=bytes(c["credential_id"])) for c in creds
+    ]
+
+    options = generate_authentication_options(
+        rp_id=RP_ID,
+        allow_credentials=allow_credentials,
+        user_verification=UserVerificationRequirement.REQUIRED,
+    )
+
+    login_challenge_key = "login_" + username
+    webauthn_challenges[login_challenge_key] = options.challenge
+    return {"options": options_to_json(options)}
+
+class LoginCompleteRequest(BaseModel):
+    username: str
+    credential: dict
+
+@app.post("/webauthn/login/complete")
+def webauthn_login_complete(body: LoginCompleteRequest):
+    login_challenge_key = "login_" + body.username
+    expected_challenge = webauthn_challenges.get(login_challenge_key)
+    if not expected_challenge:
+        raise HTTPException(status_code=400, detail="No pending login challenge")
+
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM users WHERE username = %s;", (body.username,))
+    user = cur.fetchone()
+
+    cred_id_bytes = b64_decode(body.credential["rawId"])
+    cur.execute("SELECT * FROM webauthn_credentials WHERE credential_id = %s;", (cred_id_bytes,))
+    stored_cred = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if not user or not stored_cred:
+        raise HTTPException(status_code=400, detail="Credential not recognized")
+
+    try:
+        verification = verify_authentication_response(
+            credential=body.credential,
+            expected_challenge=expected_challenge,
+            expected_origin=ORIGIN,
+            expected_rp_id=RP_ID,
+            credential_public_key=bytes(stored_cred["public_key"]),
+            credential_current_sign_count=stored_cred["sign_count"],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Authentication failed: {e}")
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("UPDATE webauthn_credentials SET sign_count = %s WHERE id = %s;", (verification.new_sign_count, stored_cred["id"]))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    token = secrets.token_hex(32)
+    active_sessions[token] = {
+        "user_id": user["id"],
+        "username": user["username"],
+        "role": user["role"],
+        "full_name": user["full_name"],
+    }
+
+    webauthn_challenges.pop(login_challenge_key, None)
+
+    return {
+        "token": token,
+        "user": {
+            "username": user["username"],
+            "role": user["role"],
+            "full_name": user["full_name"],
+        }
+    }
