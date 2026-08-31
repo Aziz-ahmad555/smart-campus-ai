@@ -4,7 +4,7 @@ import time
 import threading
 import asyncio
 import numpy as np
-from collections import Counter
+from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 import psycopg2
 from dotenv import load_dotenv
@@ -19,11 +19,17 @@ CROWD_THRESHOLD = 3
 CROWD_ALERT_COOLDOWN = 10
 FACE_DETECTION_MIN_CONFIDENCE = 0.55
 MATCH_SIMILARITY_THRESHOLD = 0.62
-VOTE_SAMPLE_COUNT = 3       # how many frames to sample before deciding
-VOTE_SAMPLE_INTERVAL = 0.35 # seconds between samples
+VOTE_SAMPLE_COUNT = 3
+VOTE_SAMPLE_INTERVAL = 0.35
+
+# Fall detection tuning
+FALL_RATIO_HISTORY_LEN = 10       # frames of aspect-ratio history kept per track
+FALL_RATIO_DROP_THRESHOLD = 0.9   # how much the height/width ratio must fall to flag a fall
+FALL_ALERT_COOLDOWN = 15          # seconds between repeated fall alerts for the same track
 
 person_model = YOLO("yolov8n.pt")
 face_model = YOLO("backend/detection/models/yolov8n-face.pt")
+pose_model = YOLO("yolov8n-pose.pt")
 
 known_track_ids = {}
 events_log = []
@@ -44,9 +50,12 @@ recognition_results_lock = threading.Lock()
 
 reference_embeddings = []
 
-# Buffers of pending crops per track_id, collected across multiple frames before voting
 pending_samples = {}
 pending_samples_lock = threading.Lock()
+
+# track_id -> deque of recent height/width ratios, and last fall alert time
+ratio_history = {}
+last_fall_alert = {}
 
 def get_db_connection():
     return psycopg2.connect(
@@ -129,7 +138,6 @@ def get_tight_face_crop(person_crop):
         return None
 
 def match_single_frame(face_crop):
-    """Returns (identity_or_None, score) for ONE frame's face crop."""
     if not reference_embeddings:
         return None, 0
     try:
@@ -192,8 +200,36 @@ def check_crowd(person_count):
         add_event("CROWD_ALERT", None, f"{person_count} people detected in frame")
         print(f"[CROWD ALERT] {person_count} people detected at {time.strftime('%H:%M:%S')}")
 
+def check_fall(track_id, box_width, box_height, label):
+    """Heuristic: a standing person's box is tall (h/w > 1.3ish); a fallen person's box
+    is wide/short (h/w drops sharply). We watch for a fast transition, not just a static wide box,
+    to avoid false positives on people who are simply sitting or crouching slowly."""
+    if box_width <= 0:
+        return
+    ratio = box_height / box_width
+
+    if track_id not in ratio_history:
+        ratio_history[track_id] = deque(maxlen=FALL_RATIO_HISTORY_LEN)
+    ratio_history[track_id].append(ratio)
+
+    history = ratio_history[track_id]
+    if len(history) < FALL_RATIO_HISTORY_LEN:
+        return  # not enough history yet
+
+    max_ratio = max(list(history)[:5])   # tallest (most "standing") in the earlier half
+    min_ratio = min(list(history)[5:])   # shortest (most "fallen") in the recent half
+
+    drop = max_ratio - min_ratio
+
+    if drop > FALL_RATIO_DROP_THRESHOLD and min_ratio < 0.9:
+        now = time.time()
+        last_alert = last_fall_alert.get(track_id, 0)
+        if (now - last_alert) > FALL_ALERT_COOLDOWN:
+            last_fall_alert[track_id] = now
+            add_event("FALL_DETECTED", track_id, label + " — possible fall detected")
+            print(f"[FALL ALERT] Track ID {track_id}: {label} at {time.strftime('%H:%M:%S')} (ratio drop={drop:.2f})")
+
 def run_voting_recognition(track_id):
-    """Collects VOTE_SAMPLE_COUNT face crops over time, then decides by majority vote."""
     try:
         votes = []
         scores = []
@@ -204,15 +240,14 @@ def run_voting_recognition(track_id):
                 face_crop = get_tight_face_crop(crop)
                 if face_crop is not None:
                     identity, score = match_single_frame(face_crop)
-                    votes.append(identity)  # None counts as "Unknown" vote
+                    votes.append(identity)
                     scores.append(score)
             time.sleep(VOTE_SAMPLE_INTERVAL)
 
-        # Majority vote among the collected samples
         vote_counts = Counter(votes)
         if vote_counts:
             winner, count = vote_counts.most_common(1)[0]
-            if winner is not None and count >= 2:  # at least 2 of 3 must agree
+            if winner is not None and count >= 2:
                 photo_folder = winner
                 student_info = lookup_student(photo_folder)
                 label = student_info if student_info else photo_folder
@@ -252,10 +287,14 @@ def run_tracking_loop():
 
     print("Background tracking loop started.")
 
+    frame_counter = 0
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
+
+        frame_counter += 1
 
         results = person_model.track(frame, classes=[0], persist=True, verbose=False)
         current_frame_ids = set()
@@ -287,12 +326,17 @@ def run_tracking_loop():
                             recognition_executor.submit(run_voting_recognition, track_id)
                 else:
                     known_track_ids[track_id]["last_seen"] = time.time()
-                    # Keep updating the pending sample with the freshest crop while voting is in progress
                     with pending_samples_lock:
                         if track_id in pending_samples:
                             pending_samples[track_id] = person_crop
 
                 label_text = known_track_ids[track_id]["label"]
+
+                # Fall detection runs every frame using the cheap bounding-box heuristic
+                box_w = x2 - x1
+                box_h = y2 - y1
+                check_fall(track_id, box_w, box_h, label_text)
+
                 if label_text == "Identifying...":
                     box_color = (0, 165, 255)
                 elif label_text == "Unknown":
@@ -317,6 +361,8 @@ def run_tracking_loop():
                 add_event("EXIT", track_id, label)
                 print(f"[EXIT] Track ID {track_id}: {label}")
             del known_track_ids[track_id]
+            ratio_history.pop(track_id, None)
+            last_fall_alert.pop(track_id, None)
 
         update_latest_frame(frame)
 

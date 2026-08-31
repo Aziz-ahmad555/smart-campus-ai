@@ -5,6 +5,7 @@ function EventBadge({ type }) {
     ENTRY: { icon: LogIn, bg: 'bg-emerald-100 dark:bg-emerald-900/30', text: 'text-emerald-700 dark:text-emerald-400', label: 'Entry' },
     EXIT: { icon: LogOut, bg: 'bg-rose-100 dark:bg-rose-900/30', text: 'text-rose-700 dark:text-rose-400', label: 'Exit' },
     CROWD_ALERT: { icon: AlertTriangle, bg: 'bg-amber-100 dark:bg-amber-900/30', text: 'text-amber-700 dark:text-amber-400', label: 'Crowd Alert' },
+    FALL_DETECTED: { icon: AlertTriangle, bg: 'bg-red-100 dark:bg-red-900/30', text: 'text-red-700 dark:text-red-400', label: 'Fall Detected' },
   }
   const c = config[type] || { icon: HelpCircle, bg: 'bg-slate-100', text: 'text-slate-700', label: type }
   const Icon = c.icon
@@ -61,3 +62,4 @@ function EventsTable({ events }) {
 }
 
 export default EventsTable
+
