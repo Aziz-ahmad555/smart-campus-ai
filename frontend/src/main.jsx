@@ -19,18 +19,14 @@ createRoot(document.getElementById('root')).render(
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/dashboard" element={<ProtectedRoute><App /></ProtectedRoute>} />
-        <Route path="/students" element={<ProtectedRoute><StudentsPage /></ProtectedRoute>} />
-        <Route path="/visitors" element={<ProtectedRoute><VisitorsPage /></ProtectedRoute>} />
-        <Route path="/staff" element={<ProtectedRoute><StaffPage /></ProtectedRoute>} />
-        <Route path="/classes" element={<ProtectedRoute><ClassesPage /></ProtectedRoute>} />
-        <Route path="/my-profile" element={<ProtectedRoute><MyProfilePage /></ProtectedRoute>} />
-        <Route path="/my-class" element={<ProtectedRoute><MyClassPage /></ProtectedRoute>} />
+        <Route path="/dashboard" element={<ProtectedRoute allowedRoles={['admin']}><App /></ProtectedRoute>} />
+        <Route path="/students" element={<ProtectedRoute allowedRoles={['admin']}><StudentsPage /></ProtectedRoute>} />
+        <Route path="/visitors" element={<ProtectedRoute allowedRoles={['admin']}><VisitorsPage /></ProtectedRoute>} />
+        <Route path="/staff" element={<ProtectedRoute allowedRoles={['admin']}><StaffPage /></ProtectedRoute>} />
+        <Route path="/classes" element={<ProtectedRoute allowedRoles={['admin']}><ClassesPage /></ProtectedRoute>} />
+        <Route path="/my-profile" element={<ProtectedRoute allowedRoles={['student']}><MyProfilePage /></ProtectedRoute>} />
+        <Route path="/my-class" element={<ProtectedRoute allowedRoles={['teacher']}><MyClassPage /></ProtectedRoute>} />
       </Routes>
     </BrowserRouter>
   </StrictMode>,
 )
-
-
-
-

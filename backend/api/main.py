@@ -108,7 +108,8 @@ def list_students():
     return {"students": rows}
 
 @app.post("/students")
-def create_student(student: StudentCreate):
+def create_student(student: StudentCreate, token: str):
+    require_admin(token)
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
@@ -127,7 +128,8 @@ def create_student(student: StudentCreate):
         conn.close()
 
 @app.put("/students/{student_id}")
-def update_student(student_id: int, student: StudentUpdate):
+def update_student(student_id: int, student: StudentUpdate, token: str):
+    require_admin(token)
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
@@ -143,7 +145,8 @@ def update_student(student_id: int, student: StudentUpdate):
     return {"student": updated}
 
 @app.delete("/students/{student_id}")
-def delete_student(student_id: int):
+def delete_student(student_id: int, token: str):
+    require_admin(token)
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("DELETE FROM students WHERE id = %s RETURNING id;", (student_id,))
@@ -179,7 +182,8 @@ def list_visitors():
     return {"visitors": rows}
 
 @app.post("/visitors")
-def check_in_visitor(visitor: VisitorCreate):
+def check_in_visitor(visitor: VisitorCreate, token: str):
+    require_admin(token)
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
@@ -193,7 +197,8 @@ def check_in_visitor(visitor: VisitorCreate):
     return {"visitor": new_visitor}
 
 @app.put("/visitors/{visitor_id}/checkout")
-def check_out_visitor(visitor_id: int):
+def check_out_visitor(visitor_id: int, token: str):
+    require_admin(token)
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
@@ -209,7 +214,8 @@ def check_out_visitor(visitor_id: int):
     return {"visitor": updated}
 
 @app.delete("/visitors/{visitor_id}")
-def delete_visitor(visitor_id: int):
+def delete_visitor(visitor_id: int, token: str):
+    require_admin(token)
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("DELETE FROM visitors WHERE id = %s RETURNING id;", (visitor_id,))
@@ -239,7 +245,8 @@ def list_classes():
     return {"classes": rows}
 
 @app.post("/classes")
-def create_class(cls: ClassCreate):
+def create_class(cls: ClassCreate, token: str):
+    require_admin(token)
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
@@ -253,7 +260,8 @@ def create_class(cls: ClassCreate):
     return {"class": new_class}
 
 @app.delete("/classes/{class_id}")
-def delete_class(class_id: int):
+def delete_class(class_id: int, token: str):
+    require_admin(token)
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("DELETE FROM classes WHERE id = %s RETURNING id;", (class_id,))
@@ -290,7 +298,8 @@ def list_staff():
     return {"staff": rows}
 
 @app.post("/staff")
-def create_staff(person: StaffCreate):
+def create_staff(person: StaffCreate, token: str):
+    require_admin(token)
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
@@ -304,7 +313,8 @@ def create_staff(person: StaffCreate):
     return {"staff": new_staff}
 
 @app.put("/staff/{staff_id}")
-def update_staff(staff_id: int, person: StaffUpdate):
+def update_staff(staff_id: int, person: StaffUpdate, token: str):
+    require_admin(token)
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
@@ -320,7 +330,8 @@ def update_staff(staff_id: int, person: StaffUpdate):
     return {"staff": updated}
 
 @app.delete("/staff/{staff_id}")
-def delete_staff(staff_id: int):
+def delete_staff(staff_id: int, token: str):
+    require_admin(token)
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("DELETE FROM staff WHERE id = %s RETURNING id;", (staff_id,))
@@ -419,3 +430,83 @@ def get_class_roster(teacher_name: str):
     conn.close()
 
     return {"class_name": class_row["name"] if class_row else None, "students": students}
+
+# ---- Secure, session-derived personal views ----
+
+def require_session(token: str):
+    session = active_sessions.get(token)
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    return session
+
+@app.get("/secure/my-events")
+def secure_my_events(token: str):
+    session = require_session(token)
+    full_name = session["full_name"]
+
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.close()
+    conn.close()
+
+    with engine.events_lock:
+        all_events = list(engine.events_log)
+
+    my_events = [e for e in all_events if e.get("label") and full_name in e["label"]]
+    return {"events": my_events}
+
+@app.get("/secure/my-class-roster")
+def secure_my_class_roster(token: str):
+    session = require_session(token)
+    if session["role"] != "teacher":
+        raise HTTPException(status_code=403, detail="Only teachers can access this endpoint")
+
+    full_name = session["full_name"]
+
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    cur.execute("SELECT class_id FROM staff WHERE name = %s;", (full_name,))
+    teacher_row = cur.fetchone()
+
+    if not teacher_row or not teacher_row["class_id"]:
+        cur.close()
+        conn.close()
+        return {"class_name": None, "students": []}
+
+    class_id = teacher_row["class_id"]
+
+    cur.execute("SELECT name FROM classes WHERE id = %s;", (class_id,))
+    class_row = cur.fetchone()
+
+    cur.execute("SELECT id, name, roll_number, photo_folder FROM students WHERE class_id = %s ORDER BY name;", (class_id,))
+    students = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    student_names = [s["name"] for s in students]
+    with engine.events_lock:
+        all_events = list(engine.events_log)
+    class_events = [e for e in all_events if e.get("label") and any(name in e["label"] for name in student_names)]
+
+    return {"class_name": class_row["name"] if class_row else None, "students": students, "events": class_events}
+
+def require_admin(token: str):
+    session = active_sessions.get(token)
+    if not session:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    if session["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return session
+
+
+
+
+
+
+
+
+
+
+

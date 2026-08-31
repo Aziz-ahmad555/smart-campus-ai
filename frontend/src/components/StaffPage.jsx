@@ -36,7 +36,9 @@ function StaffPage() {
       setError('Name, role, and photo folder are required.')
       return
     }
-    const url = editingId ? 'http://localhost:8000/staff/' + editingId : 'http://localhost:8000/staff'
+    const token = localStorage.getItem('sentra_token')
+    const baseUrl = editingId ? 'http://localhost:8000/staff/' + editingId : 'http://localhost:8000/staff'
+    const url = baseUrl + '?token=' + token
     const method = editingId ? 'PUT' : 'POST'
     try {
       const res = await fetch(url, {
@@ -44,7 +46,10 @@ function StaffPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
       })
-      if (!res.ok) throw new Error('Request failed')
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.detail || 'Request failed')
+      }
       fetchStaff()
       resetForm()
     } catch (e) {
@@ -60,11 +65,16 @@ function StaffPage() {
 
   const handleDelete = async (id) => {
     if (!confirm('Delete this staff record?')) return
+    const token = localStorage.getItem('sentra_token')
     try {
-      await fetch('http://localhost:8000/staff/' + id, { method: 'DELETE' })
+      const res = await fetch('http://localhost:8000/staff/' + id + '?token=' + token, { method: 'DELETE' })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.detail || 'Could not delete staff member.')
+      }
       fetchStaff()
     } catch (e) {
-      setError('Could not delete staff member.')
+      setError(e.message)
     }
   }
 

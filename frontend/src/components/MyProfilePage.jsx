@@ -9,7 +9,7 @@ function MyProfilePage() {
   const user = userJson ? JSON.parse(userJson) : null
 
   useEffect(() => {
-    fetch('http://localhost:8000/events')
+    fetch('http://localhost:8000/secure/my-events?token=' + localStorage.getItem('sentra_token'))
       .then((res) => res.json())
       .then((data) => setEvents(data.events))
       .catch(() => {})
@@ -79,3 +79,4 @@ function MyProfilePage() {
 }
 
 export default MyProfilePage
+

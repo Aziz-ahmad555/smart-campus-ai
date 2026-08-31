@@ -47,9 +47,12 @@ function StudentsPage() {
       setError('Name, roll number, and photo folder are required.')
       return
     }
-    const url = editingId
+
+    const token = localStorage.getItem('sentra_token')
+    const baseUrl = editingId
       ? 'http://localhost:8000/students/' + editingId
       : 'http://localhost:8000/students'
+    const url = baseUrl + '?token=' + token
     const method = editingId ? 'PUT' : 'POST'
 
     const payload = {
@@ -87,11 +90,16 @@ function StudentsPage() {
 
   const handleDelete = async (id) => {
     if (!confirm('Delete this student record?')) return
+    const token = localStorage.getItem('sentra_token')
     try {
-      await fetch('http://localhost:8000/students/' + id, { method: 'DELETE' })
+      const res = await fetch('http://localhost:8000/students/' + id + '?token=' + token, { method: 'DELETE' })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.detail || 'Could not delete student.')
+      }
       fetchStudents()
     } catch (e) {
-      setError('Could not delete student.')
+      setError(e.message)
     }
   }
 

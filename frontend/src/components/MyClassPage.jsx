@@ -11,7 +11,7 @@ function MyClassPage() {
 
   useEffect(() => {
     if (!user) return
-    fetch('http://localhost:8000/my-class-roster?teacher_name=' + encodeURIComponent(user.full_name))
+    fetch('http://localhost:8000/secure/my-class-roster?token=' + localStorage.getItem('sentra_token'))
       .then((res) => res.json())
       .then((data) => setClassData(data))
       .catch(() => {})
@@ -116,3 +116,4 @@ function MyClassPage() {
 }
 
 export default MyClassPage
+

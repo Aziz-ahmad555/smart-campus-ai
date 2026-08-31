@@ -34,13 +34,17 @@ function ClassesPage() {
       setError('Class name is required.')
       return
     }
+    const token = localStorage.getItem('sentra_token')
     try {
-      const res = await fetch('http://localhost:8000/classes', {
+      const res = await fetch('http://localhost:8000/classes?token=' + token, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
       })
-      if (!res.ok) throw new Error('Could not create class.')
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.detail || 'Could not create class.')
+      }
       fetchClasses()
       resetForm()
     } catch (e) {
@@ -50,11 +54,16 @@ function ClassesPage() {
 
   const handleDelete = async (id) => {
     if (!confirm('Delete this class?')) return
+    const token = localStorage.getItem('sentra_token')
     try {
-      await fetch('http://localhost:8000/classes/' + id, { method: 'DELETE' })
+      const res = await fetch('http://localhost:8000/classes/' + id + '?token=' + token, { method: 'DELETE' })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.detail || 'Could not delete class.')
+      }
       fetchClasses()
     } catch (e) {
-      setError('Could not delete class.')
+      setError(e.message)
     }
   }
 

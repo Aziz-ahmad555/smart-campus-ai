@@ -65,13 +65,17 @@ function VisitorsPage() {
       setError('Visitor name is required.')
       return
     }
+    const token = localStorage.getItem('sentra_token')
     try {
-      const res = await fetch('http://localhost:8000/visitors', {
+      const res = await fetch('http://localhost:8000/visitors?token=' + token, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
       })
-      if (!res.ok) throw new Error('Check-in failed')
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.detail || 'Check-in failed')
+      }
       fetchVisitors()
       resetForm()
     } catch (e) {
@@ -80,11 +84,16 @@ function VisitorsPage() {
   }
 
   const handleCheckOut = async (id) => {
+    const token = localStorage.getItem('sentra_token')
     try {
-      await fetch('http://localhost:8000/visitors/' + id + '/checkout', { method: 'PUT' })
+      const res = await fetch('http://localhost:8000/visitors/' + id + '/checkout?token=' + token, { method: 'PUT' })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.detail || 'Could not check out visitor.')
+      }
       fetchVisitors()
     } catch (e) {
-      setError('Could not check out visitor.')
+      setError(e.message)
     }
   }
 
