@@ -123,8 +123,8 @@ smart-campus-ai/
 │   │   ├── App.jsx      # Routes (signed-in pages load on demand)
 │   │   └── main.jsx     # Entry point
 ├── data/
-│   ├── known_faces/     # Reference photos per identity (22 for primary test subject)
-│   └── test_images/     # Held-out evaluation test set (5 conditions)
+│   ├── known_faces/     # Reference photos per identity (local only, not in git)
+│   └── test_images/     # Held-out evaluation test set, 5 conditions (local only)
 ├── evaluation/           # Benchmark scripts, results, charts
 └── README.md
 ```
@@ -151,6 +151,8 @@ DB_NAME=smart_campus_db
 DB_USER=postgres
 DB_PASSWORD=your_password
 ```
+
+Add face photos for the people you want to recognize: see [data/README.md](data/README.md). Face images are never committed, so a fresh clone starts with none.
 
 Run the API:
 ```bash
