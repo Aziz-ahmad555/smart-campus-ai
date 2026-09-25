@@ -185,6 +185,12 @@ Choose the `admin` role. Teacher and student accounts are linked to a person: th
 - `yolov8n.pt` (person detection) downloads automatically on first run.
 - A YOLOv8 face-detection model must be placed at `backend/detection/models/yolov8n-face.pt`. Model files (`*.pt`) aren't stored in git.
 - Add reference photos for the people to recognize, as described in [data/README.md](data/README.md). Face images are never committed, so a fresh clone starts with none.
+- Add some webcam photos too. Phone photos alone give lower scores on the live camera, because the lens, lighting and compression differ. With the API stopped (it holds the camera), run:
+  ```bash
+  python evaluation/enroll_webcam.py --person AzizAhmad --count 15
+  ```
+  `--person` is the person's photo folder. The script asks you to look straight, then turn your head a little left, right, up and down. It saves only frames that pass the live pipeline's face checks: the YOLOv8n-face detector, confidence ≥ 0.55, a face of at least 40 × 40 px, exactly one face in view, and one MTCNN-alignable face. Photos go into `data/known_faces/<person>/` (git-ignored). At the end it prints how many were saved and where. Restart the API afterwards so the reference embeddings are rebuilt.
+  Then check that strangers are still rejected with the extra references: `python evaluation/evaluate_recognition.py` (FAR must stay 0%) and `python -m pytest tests/test_recheck.py -k stranger`.
 
 ### 7. Run
 ```bash

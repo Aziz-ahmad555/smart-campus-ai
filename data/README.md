@@ -19,4 +19,5 @@ data/
 - The folder name under `known_faces/` must match the **Photo folder** you enter for that student or staff member in the dashboard.
 - Only use photos of people who have agreed to it. For a demo, use your own face.
 - Reference embeddings are rebuilt when the backend starts, so restart it after adding photos.
+- Webcam photos can be added with `python evaluation/enroll_webcam.py --person <PhotoFolder>` (see the main README, Setup step 6).
 - More reference photos from different angles and lighting improve recognition. The evaluation results in the main README used 22 reference photos of one person.
