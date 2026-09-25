@@ -26,7 +26,7 @@ function roleTone(role) {
 
 export default function StaffPage() {
   const toast = useToast()
-  const staff = useApi('/staff', { select: (d) => d.staff, initial: [] })
+  const staff = useApi('/staff', { auth: true, select: (d) => d.staff, initial: [] })
 
   const [query, setQuery] = useState('')
   const [role, setRole] = useState('all')

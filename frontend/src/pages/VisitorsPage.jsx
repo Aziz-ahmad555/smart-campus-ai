@@ -50,7 +50,7 @@ function Remaining({ visitor, now }) {
 
 export default function VisitorsPage() {
   const toast = useToast()
-  const visitors = useApi('/visitors', { select: (d) => d.visitors, initial: [], interval: 10000 })
+  const visitors = useApi('/visitors', { auth: true, select: (d) => d.visitors, initial: [], interval: 10000 })
   const [now, setNow] = useState(new Date())
   const [view, setView] = useState('active')
   const [open, setOpen] = useState(false)

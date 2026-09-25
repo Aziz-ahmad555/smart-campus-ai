@@ -15,8 +15,8 @@ const EMPTY = { name: '', grade_level: '', section: '' }
 
 export default function ClassesPage() {
   const toast = useToast()
-  const classes = useApi('/classes', { select: (d) => d.classes, initial: [] })
-  const students = useApi('/students', { select: (d) => d.students, initial: [] })
+  const classes = useApi('/classes', { auth: true, select: (d) => d.classes, initial: [] })
+  const students = useApi('/students', { auth: true, select: (d) => d.students, initial: [] })
 
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState(EMPTY)

@@ -20,6 +20,13 @@ export function apiUrl(path, { auth = false, params = {} } = {}) {
   return url.toString()
 }
 
+// The camera feed (<img>) and the event WebSocket can't send the session, so
+// they use a short-lived, single-use ticket from the backend instead.
+export async function streamUrl(purpose, path) {
+  const { ticket } = await api('/stream-ticket', { method: 'POST', auth: true, params: { purpose } })
+  return `${purpose === 'events' ? WS_URL : API_URL}${path}?ticket=${encodeURIComponent(ticket)}`
+}
+
 export async function api(path, { method = 'GET', body, auth = false, params } = {}) {
   let res
   try {

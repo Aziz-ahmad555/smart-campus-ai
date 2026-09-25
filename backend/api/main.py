@@ -1,18 +1,33 @@
-﻿import asyncio
+import asyncio
+import base64
 import time
 from datetime import datetime, timedelta
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from typing import Optional
+
+import bcrypt
+import psycopg2
+import psycopg2.extras
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional
-import psycopg2
-import psycopg2.extras
-import os
-from dotenv import load_dotenv
-from backend.tracking import engine
+from webauthn import (
+    generate_authentication_options,
+    generate_registration_options,
+    options_to_json,
+    verify_authentication_response,
+    verify_registration_response,
+)
+from webauthn.helpers.structs import (
+    AuthenticatorSelectionCriteria,
+    PublicKeyCredentialDescriptor,
+    UserVerificationRequirement,
+)
 
-load_dotenv()
+from backend.api import auth
+from backend.api.auth import admin_only, current_session, teacher_only
+from backend.api.db import get_db_connection
+from backend.tracking import engine
 
 app = FastAPI(title="Smart Campus AI API")
 
@@ -24,14 +39,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def get_db_connection():
-    return psycopg2.connect(
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT"),
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD")
-    )
 
 class StudentCreate(BaseModel):
     name: str
@@ -39,11 +46,13 @@ class StudentCreate(BaseModel):
     photo_folder: str
     class_id: Optional[int] = None
 
+
 class StudentUpdate(BaseModel):
     name: str
     roll_number: str
     photo_folder: str
     class_id: Optional[int] = None
+
 
 class VisitorCreate(BaseModel):
     name: str
@@ -52,53 +61,83 @@ class VisitorCreate(BaseModel):
     host_name: Optional[str] = None
     allowed_minutes: int = 60
 
+
 @app.on_event("startup")
 def startup_event():
     engine.main_event_loop = asyncio.get_event_loop()
     engine.start_background_tracking()
 
+
 @app.get("/")
 def read_root():
     return {"message": "Smart Campus AI backend is running"}
+
 
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
 
+
+# ---- Live pipeline: events, camera feed, WebSocket (admin) ----
+
 @app.get("/events")
-def get_events():
+def get_events(session=Depends(admin_only)):
     with engine.events_lock:
         return {"events": list(engine.events_log)}
 
-def mjpeg_generator():
-    while True:
+
+@app.post("/stream-ticket")
+def stream_ticket(purpose: str, session=Depends(admin_only)):
+    """Short-lived ticket for /video-feed or /ws/events (see auth.py)."""
+    return {"ticket": auth.issue_ticket(session["token"], purpose), "expires_in": auth.TICKET_TTL_SECONDS}
+
+
+def mjpeg_generator(token):
+    while auth.get_session(token):          # the stream ends when the session does
         frame = engine.get_latest_frame()
         if frame is not None:
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
         time.sleep(0.05)
 
+
 @app.get("/video-feed")
-def video_feed():
+def video_feed(ticket: str = None):
+    token = auth.redeem_ticket(ticket, "video")
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing, expired or used stream ticket")
     return StreamingResponse(
-        mjpeg_generator(),
+        mjpeg_generator(token),
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 
+
 @app.websocket("/ws/events")
-async def websocket_events(websocket: WebSocket):
+async def websocket_events(websocket: WebSocket, ticket: str = None):
+    token = auth.redeem_ticket(ticket, "events")
+    if not token:
+        await websocket.close(code=4401)    # before accept: the handshake is refused
+        return
     await websocket.accept()
     engine.connected_websockets.append(websocket)
     try:
-        while True:
-            await websocket.receive_text()
+        while auth.get_session(token):
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=30)
+            except asyncio.TimeoutError:
+                pass
+        await websocket.close(code=4401)
     except WebSocketDisconnect:
-        engine.connected_websockets.remove(websocket)
+        pass
+    finally:
+        if websocket in engine.connected_websockets:
+            engine.connected_websockets.remove(websocket)
 
-# ---- Student CRUD ----
+
+# ---- Student CRUD (admin) ----
 
 @app.get("/students")
-def list_students():
+def list_students(session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT s.id, s.name, s.roll_number, s.photo_folder, s.created_at, s.class_id, c.name AS class_name FROM students s LEFT JOIN classes c ON s.class_id = c.id ORDER BY s.id;")
@@ -107,9 +146,9 @@ def list_students():
     conn.close()
     return {"students": rows}
 
+
 @app.post("/students")
-def create_student(student: StudentCreate, token: str):
-    require_admin(token)
+def create_student(student: StudentCreate, session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     try:
@@ -127,9 +166,9 @@ def create_student(student: StudentCreate, token: str):
         cur.close()
         conn.close()
 
+
 @app.put("/students/{student_id}")
-def update_student(student_id: int, student: StudentUpdate, token: str):
-    require_admin(token)
+def update_student(student_id: int, student: StudentUpdate, session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
@@ -144,9 +183,9 @@ def update_student(student_id: int, student: StudentUpdate, token: str):
         raise HTTPException(status_code=404, detail="Student not found")
     return {"student": updated}
 
+
 @app.delete("/students/{student_id}")
-def delete_student(student_id: int, token: str):
-    require_admin(token)
+def delete_student(student_id: int, session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("DELETE FROM students WHERE id = %s RETURNING id;", (student_id,))
@@ -158,7 +197,8 @@ def delete_student(student_id: int, token: str):
         raise HTTPException(status_code=404, detail="Student not found")
     return {"deleted": True}
 
-# ---- Visitor Management ----
+
+# ---- Visitor Management (admin) ----
 
 def compute_visitor_status(row):
     if row["check_out_time"] is not None:
@@ -168,8 +208,9 @@ def compute_visitor_status(row):
         return "overstayed"
     return "checked_in"
 
+
 @app.get("/visitors")
-def list_visitors():
+def list_visitors(session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM visitors ORDER BY check_in_time DESC;")
@@ -181,9 +222,9 @@ def list_visitors():
         row["expiry_time"] = row["check_in_time"] + timedelta(minutes=row["allowed_minutes"])
     return {"visitors": rows}
 
+
 @app.post("/visitors")
-def check_in_visitor(visitor: VisitorCreate, token: str):
-    require_admin(token)
+def check_in_visitor(visitor: VisitorCreate, session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
@@ -196,9 +237,9 @@ def check_in_visitor(visitor: VisitorCreate, token: str):
     conn.close()
     return {"visitor": new_visitor}
 
+
 @app.put("/visitors/{visitor_id}/checkout")
-def check_out_visitor(visitor_id: int, token: str):
-    require_admin(token)
+def check_out_visitor(visitor_id: int, session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
@@ -213,9 +254,9 @@ def check_out_visitor(visitor_id: int, token: str):
         raise HTTPException(status_code=404, detail="Visitor not found")
     return {"visitor": updated}
 
+
 @app.delete("/visitors/{visitor_id}")
-def delete_visitor(visitor_id: int, token: str):
-    require_admin(token)
+def delete_visitor(visitor_id: int, session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("DELETE FROM visitors WHERE id = %s RETURNING id;", (visitor_id,))
@@ -227,15 +268,17 @@ def delete_visitor(visitor_id: int, token: str):
         raise HTTPException(status_code=404, detail="Visitor not found")
     return {"deleted": True}
 
-# ---- Classes ----
+
+# ---- Classes (admin) ----
 
 class ClassCreate(BaseModel):
     name: str
     grade_level: Optional[str] = None
     section: Optional[str] = None
 
+
 @app.get("/classes")
-def list_classes():
+def list_classes(session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM classes ORDER BY id;")
@@ -244,9 +287,9 @@ def list_classes():
     conn.close()
     return {"classes": rows}
 
+
 @app.post("/classes")
-def create_class(cls: ClassCreate, token: str):
-    require_admin(token)
+def create_class(cls: ClassCreate, session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
@@ -259,9 +302,9 @@ def create_class(cls: ClassCreate, token: str):
     conn.close()
     return {"class": new_class}
 
+
 @app.delete("/classes/{class_id}")
-def delete_class(class_id: int, token: str):
-    require_admin(token)
+def delete_class(class_id: int, session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("DELETE FROM classes WHERE id = %s RETURNING id;", (class_id,))
@@ -273,7 +316,8 @@ def delete_class(class_id: int, token: str):
         raise HTTPException(status_code=404, detail="Class not found")
     return {"deleted": True}
 
-# ---- Staff ----
+
+# ---- Staff (admin) ----
 
 class StaffCreate(BaseModel):
     name: str
@@ -281,14 +325,16 @@ class StaffCreate(BaseModel):
     department: Optional[str] = None
     photo_folder: str
 
+
 class StaffUpdate(BaseModel):
     name: str
     role: str
     department: Optional[str] = None
     photo_folder: str
 
+
 @app.get("/staff")
-def list_staff():
+def list_staff(session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM staff ORDER BY id;")
@@ -297,9 +343,9 @@ def list_staff():
     conn.close()
     return {"staff": rows}
 
+
 @app.post("/staff")
-def create_staff(person: StaffCreate, token: str):
-    require_admin(token)
+def create_staff(person: StaffCreate, session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
@@ -312,9 +358,9 @@ def create_staff(person: StaffCreate, token: str):
     conn.close()
     return {"staff": new_staff}
 
+
 @app.put("/staff/{staff_id}")
-def update_staff(staff_id: int, person: StaffUpdate, token: str):
-    require_admin(token)
+def update_staff(staff_id: int, person: StaffUpdate, session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
@@ -329,9 +375,9 @@ def update_staff(staff_id: int, person: StaffUpdate, token: str):
         raise HTTPException(status_code=404, detail="Staff member not found")
     return {"staff": updated}
 
+
 @app.delete("/staff/{staff_id}")
-def delete_staff(staff_id: int, token: str):
-    require_admin(token)
+def delete_staff(staff_id: int, session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("DELETE FROM staff WHERE id = %s RETURNING id;", (staff_id,))
@@ -344,20 +390,12 @@ def delete_staff(staff_id: int, token: str):
     return {"deleted": True}
 
 
-
-
-
-
 # ---- Authentication ----
-
-import bcrypt
-import secrets
-
-active_sessions = {}  # token -> {user_id, username, role, full_name}
 
 class LoginRequest(BaseModel):
     username: str
     password: str
+
 
 @app.post("/login")
 def login(credentials: LoginRequest):
@@ -374,114 +412,61 @@ def login(credentials: LoginRequest):
     if not bcrypt.checkpw(credentials.password.encode("utf-8"), user["password_hash"].encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    token = secrets.token_hex(32)
-    active_sessions[token] = {
-        "user_id": user["id"],
-        "username": user["username"],
-        "role": user["role"],
-        "full_name": user["full_name"],
-    }
+    token = auth.create_session(user)
+    return {"token": token, "user": auth.public_user(auth.get_session(token))}
 
-    return {
-        "token": token,
-        "user": {
-            "username": user["username"],
-            "role": user["role"],
-            "full_name": user["full_name"],
-        }
-    }
 
 @app.get("/me")
-def get_current_user(token: str):
-    session = active_sessions.get(token)
-    if not session:
-        raise HTTPException(status_code=401, detail="Invalid or expired session")
-    return {"user": session}
+def get_current_user(session=Depends(current_session)):
+    return {"user": auth.public_user(session)}
+
 
 @app.post("/logout")
-def logout(token: str):
-    active_sessions.pop(token, None)
+def logout(session=Depends(current_session)):
+    auth.end_session(session["token"])
     return {"logged_out": True}
 
-# ---- Teacher class roster ----
 
-@app.get("/my-class-roster")
-def get_class_roster(teacher_name: str):
-    conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+# ---- Teacher class roster (teacher; derived from the session) ----
 
-    cur.execute("SELECT class_id FROM staff WHERE name = %s;", (teacher_name,))
+def teacher_class(cur, full_name):
+    cur.execute("SELECT class_id FROM staff WHERE name = %s;", (full_name,))
     teacher_row = cur.fetchone()
-
     if not teacher_row or not teacher_row["class_id"]:
-        cur.close()
-        conn.close()
-        return {"class_name": None, "students": []}
-
+        return None, None, []
     class_id = teacher_row["class_id"]
-
     cur.execute("SELECT name FROM classes WHERE id = %s;", (class_id,))
     class_row = cur.fetchone()
-
     cur.execute("SELECT id, name, roll_number, photo_folder FROM students WHERE class_id = %s ORDER BY name;", (class_id,))
-    students = cur.fetchall()
+    return class_id, (class_row["name"] if class_row else None), cur.fetchall()
 
+
+@app.get("/my-class-roster")
+def get_class_roster(session=Depends(teacher_only)):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    _, class_name, students = teacher_class(cur, session["full_name"])
     cur.close()
     conn.close()
+    return {"class_name": class_name, "students": students}
 
-    return {"class_name": class_row["name"] if class_row else None, "students": students}
 
 # ---- Secure, session-derived personal views ----
 
-def require_session(token: str):
-    session = active_sessions.get(token)
-    if not session:
-        raise HTTPException(status_code=401, detail="Invalid or expired session")
-    return session
-
 @app.get("/secure/my-events")
-def secure_my_events(token: str):
-    session = require_session(token)
+def secure_my_events(session=Depends(current_session)):
     full_name = session["full_name"]
-
-    conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.close()
-    conn.close()
-
     with engine.events_lock:
         all_events = list(engine.events_log)
-
     my_events = [e for e in all_events if e.get("label") and full_name in e["label"]]
     return {"events": my_events}
 
+
 @app.get("/secure/my-class-roster")
-def secure_my_class_roster(token: str):
-    session = require_session(token)
-    if session["role"] != "teacher":
-        raise HTTPException(status_code=403, detail="Only teachers can access this endpoint")
-
-    full_name = session["full_name"]
-
+def secure_my_class_roster(session=Depends(teacher_only)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-
-    cur.execute("SELECT class_id FROM staff WHERE name = %s;", (full_name,))
-    teacher_row = cur.fetchone()
-
-    if not teacher_row or not teacher_row["class_id"]:
-        cur.close()
-        conn.close()
-        return {"class_name": None, "students": []}
-
-    class_id = teacher_row["class_id"]
-
-    cur.execute("SELECT name FROM classes WHERE id = %s;", (class_id,))
-    class_row = cur.fetchone()
-
-    cur.execute("SELECT id, name, roll_number, photo_folder FROM students WHERE class_id = %s ORDER BY name;", (class_id,))
-    students = cur.fetchall()
-
+    _, class_name, students = teacher_class(cur, session["full_name"])
     cur.close()
     conn.close()
 
@@ -490,42 +475,10 @@ def secure_my_class_roster(token: str):
         all_events = list(engine.events_log)
     class_events = [e for e in all_events if e.get("label") and any(name in e["label"] for name in student_names)]
 
-    return {"class_name": class_row["name"] if class_row else None, "students": students, "events": class_events}
-
-def require_admin(token: str):
-    session = active_sessions.get(token)
-    if not session:
-        raise HTTPException(status_code=401, detail="Invalid or expired session")
-    if session["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return session
-
-
-
-
-
-
-
-
-
-
+    return {"class_name": class_name, "students": students, "events": class_events}
 
 
 # ---- WebAuthn Fingerprint Authentication ----
-
-from webauthn import (
-    generate_registration_options,
-    verify_registration_response,
-    generate_authentication_options,
-    verify_authentication_response,
-    options_to_json,
-)
-from webauthn.helpers.structs import (
-    PublicKeyCredentialDescriptor,
-    AuthenticatorSelectionCriteria,
-    UserVerificationRequirement,
-)
-import base64
 
 RP_ID = "localhost"
 RP_NAME = "Sentra Campus Intelligence"
@@ -533,19 +486,18 @@ ORIGIN = "http://localhost:5173"
 
 webauthn_challenges = {}  # temporary storage: token -> challenge bytes
 
+
 def b64_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
+
 
 def b64_decode(data: str) -> bytes:
     padding = "=" * (-len(data) % 4)
     return base64.urlsafe_b64decode(data + padding)
 
-@app.post("/webauthn/register/begin")
-def webauthn_register_begin(token: str):
-    session = active_sessions.get(token)
-    if not session:
-        raise HTTPException(status_code=401, detail="Invalid session")
 
+@app.post("/webauthn/register/begin")
+def webauthn_register_begin(session=Depends(current_session)):
     options = generate_registration_options(
         rp_id=RP_ID,
         rp_name=RP_NAME,
@@ -557,19 +509,17 @@ def webauthn_register_begin(token: str):
         ),
     )
 
-    webauthn_challenges[token] = options.challenge
+    webauthn_challenges[session["token"]] = options.challenge
     return {"options": options_to_json(options)}
+
 
 class RegisterCompleteRequest(BaseModel):
     credential: dict
 
-@app.post("/webauthn/register/complete")
-def webauthn_register_complete(token: str, body: RegisterCompleteRequest):
-    session = active_sessions.get(token)
-    if not session:
-        raise HTTPException(status_code=401, detail="Invalid session")
 
-    expected_challenge = webauthn_challenges.get(token)
+@app.post("/webauthn/register/complete")
+def webauthn_register_complete(body: RegisterCompleteRequest, session=Depends(current_session)):
+    expected_challenge = webauthn_challenges.get(session["token"])
     if not expected_challenge:
         raise HTTPException(status_code=400, detail="No pending registration challenge")
 
@@ -593,8 +543,9 @@ def webauthn_register_complete(token: str, body: RegisterCompleteRequest):
     cur.close()
     conn.close()
 
-    webauthn_challenges.pop(token, None)
+    webauthn_challenges.pop(session["token"], None)
     return {"registered": True}
+
 
 @app.post("/webauthn/login/begin")
 def webauthn_login_begin(username: str):
@@ -629,9 +580,11 @@ def webauthn_login_begin(username: str):
     webauthn_challenges[login_challenge_key] = options.challenge
     return {"options": options_to_json(options)}
 
+
 class LoginCompleteRequest(BaseModel):
     username: str
     credential: dict
+
 
 @app.post("/webauthn/login/complete")
 def webauthn_login_complete(body: LoginCompleteRequest):
@@ -673,21 +626,6 @@ def webauthn_login_complete(body: LoginCompleteRequest):
     cur.close()
     conn.close()
 
-    token = secrets.token_hex(32)
-    active_sessions[token] = {
-        "user_id": user["id"],
-        "username": user["username"],
-        "role": user["role"],
-        "full_name": user["full_name"],
-    }
-
+    token = auth.create_session(user)
     webauthn_challenges.pop(login_challenge_key, None)
-
-    return {
-        "token": token,
-        "user": {
-            "username": user["username"],
-            "role": user["role"],
-            "full_name": user["full_name"],
-        }
-    }
+    return {"token": token, "user": auth.public_user(auth.get_session(token))}

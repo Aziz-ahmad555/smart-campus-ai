@@ -18,8 +18,8 @@ const EMPTY = { name: '', roll_number: '', photo_folder: '', class_id: '' }
 
 export default function StudentsPage() {
   const toast = useToast()
-  const students = useApi('/students', { select: (d) => d.students, initial: [] })
-  const classes = useApi('/classes', { select: (d) => d.classes, initial: [] })
+  const students = useApi('/students', { auth: true, select: (d) => d.students, initial: [] })
+  const classes = useApi('/classes', { auth: true, select: (d) => d.classes, initial: [] })
 
   const [query, setQuery] = useState('')
   const [classFilter, setClassFilter] = useState('')
