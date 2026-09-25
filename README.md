@@ -249,6 +249,10 @@ npm test
 - Evaluation dataset is intentionally small (15 held-out test images) for rapid iteration; results are indicative and methodologically sound but not statistically exhaustive
 - Crowd detection uses a simple frame-count threshold rather than density-aware spatial analysis
 - Sessions are held in server memory, so restarting the backend signs everyone out
+- The failed-sign-in lockout counters are also in memory: a backend restart clears them, and they aren't shared between several backend processes
+- Recognized people's names are printed to the backend console (entry, exit and alert lines), so console output and any log files made from it contain personal data and should be protected accordingly
+- The session token is kept in the browser's `localStorage`, so a cross-site scripting bug in the dashboard could expose it. React escapes page content by default, but a production deployment should also send a Content-Security-Policy for the dashboard from its web server
+- Behind a reverse proxy, the sign-in limits count the proxy's address instead of each client's unless the proxy forwards the client IP and uvicorn is started with `--proxy-headers --forwarded-allow-ips=<proxy>`
 
 ## Future Work
 
