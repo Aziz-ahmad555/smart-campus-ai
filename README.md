@@ -1,5 +1,7 @@
 # Smart Campus AI — Real-Time Intelligent Surveillance & Access System
 
+[![CI](https://github.com/Aziz-ahmad555/smart-campus-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/Aziz-ahmad555/smart-campus-ai/actions/workflows/ci.yml)
+
 An end-to-end AI perception pipeline that detects people, recognizes faces, tracks identities across frames, and logs entry/exit events in real time — built from scratch with YOLOv8, DeepFace, PostgreSQL, FastAPI, and React.
 
 This is not just a face recognition demo. It is a full system architecture: **camera → detection → recognition → database → tracking → API → live dashboard**, backed by structured evaluation of accuracy, latency, and robustness under real-world conditions — including an iterative optimization process that improved recognition accuracy from 66.7% to 86.7%.
@@ -216,6 +218,8 @@ python -m pytest tests
 ```
 - No webcam, face model or real database is used. The camera/recognition engine is replaced by a fake, and each run creates a throwaway PostgreSQL cluster in a temp folder with `initdb`, loads `schema.sql` and deletes it afterwards. Your own database is never touched.
 - The PostgreSQL command-line tools must be installed. They're found on your PATH, in `C:\Program Files\PostgreSQL\*\bin`, or via the `PG_BIN` environment variable. To use an existing empty database instead, set `TEST_DB_HOST`, `TEST_DB_PORT`, `TEST_DB_NAME`, `TEST_DB_USER` and `TEST_DB_PASSWORD`.
+
+**Continuous integration:** `.github/workflows/ci.yml` runs on every push and pull request. It runs the backend tests against a PostgreSQL 18 service container (installing only `requirements-ci.txt`, since the tests fake the camera and face models), and the frontend lint, tests and build.
 
 **Frontend** (Vitest + Testing Library, 12 tests): the login page, route protection by role and session expiry, a list page's error state, the API client's auth header and 401 handling, loading older history, a refused delete's message, and form length limits.
 ```bash

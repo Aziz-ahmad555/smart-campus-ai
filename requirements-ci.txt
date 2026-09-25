@@ -1,0 +1,13 @@
+# What the test suite needs, without the heavy vision stack (TensorFlow,
+# DeepFace, Ultralytics): the tests replace the camera and face models with
+# fakes. Versions match requirements.txt.
+fastapi==0.141.1
+pydantic==2.13.4
+python-dotenv==1.2.3
+psycopg2-binary==2.9.12
+bcrypt==5.0.0
+webauthn==3.0.0
+numpy==2.4.6
+opencv-python-headless==4.10.0.84
+pytest==9.1.1
+httpx==0.28.1
