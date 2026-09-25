@@ -111,7 +111,7 @@ smart-campus-ai/
 │   ├── recognition/     # DeepFace recognition logic
 │   ├── tracking/        # ByteTrack + entry/exit/crowd detection engine
 │   ├── api/             # FastAPI application (REST + WebSocket)
-│   └── database/        # PostgreSQL connection/testing
+│   └── database/        # schema.sql, seed.sql (fictional demo data), create_user.py
 ├── frontend/
 │   ├── src/
 │   │   ├── pages/       # One file per screen (dashboard, students, visitors, login, ...)
@@ -131,44 +131,56 @@ smart-campus-ai/
 
 ## Setup
 
-### Prerequisites
+From a fresh clone to a running system. Commands are for Windows (PowerShell); on macOS/Linux use `source venv/bin/activate` and `/` paths.
+
+### 1. Prerequisites
 - Python 3.11
 - Node.js 18+
-- PostgreSQL 18+
+- PostgreSQL 13+ (developed on 18), with `psql` on your PATH
+- A webcam (for the live pipeline)
 
-### Backend
+### 2. Python environment
 ```bash
 python -m venv venv
-venv\Scripts\activate        # Windows
+venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Create a `.env` file in the project root:
-```
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=smart_campus_db
-DB_USER=postgres
-DB_PASSWORD=your_password
-```
-
-Add face photos for the people you want to recognize: see [data/README.md](data/README.md). Face images are never committed, so a fresh clone starts with none.
-
-Run the API:
+### 3. Database
+Create the database, the tables and (optionally) some demo data with fictional people:
 ```bash
-uvicorn backend.api.main:app --reload
+createdb -U postgres smart_campus_db
+psql -U postgres -d smart_campus_db -f backend/database/schema.sql
+psql -U postgres -d smart_campus_db -f backend/database/seed.sql     # optional
 ```
 
-### Frontend
+### 4. Configuration
+Copy `.env.example` to `.env` in the project root and set your database password. `.env` is ignored by git.
+
+### 5. An admin account
+```bash
+python backend/database/create_user.py
+```
+Choose the `admin` role. For teacher and student accounts, the full name must match their name in the staff or students list. With the seed data, a teacher account named "Demo Teacher One" sees Grade 9 - A.
+
+### 6. Models and face photos
+- `yolov8n.pt` (person detection) downloads automatically on first run.
+- A YOLOv8 face-detection model must be placed at `backend/detection/models/yolov8n-face.pt`. Model files (`*.pt`) aren't stored in git.
+- Add reference photos for the people to recognize, as described in [data/README.md](data/README.md). Face images are never committed, so a fresh clone starts with none.
+
+### 7. Run
+```bash
+uvicorn backend.api.main:app --reload          # API on http://localhost:8000
+```
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev                                    # dashboard on http://localhost:5173
 ```
 
 The dashboard talks to `http://localhost:8000` by default. To use another backend, copy `frontend/.env.example` to `frontend/.env` and set `VITE_API_URL`.
 
-Visit http://localhost:5173 for the landing page and sign in; admins land on the live dashboard, teachers on their class, students on their own profile.
+Open http://localhost:5173 and sign in. Admins land on the live dashboard, teachers on their class, students on their own profile. Sessions last 8 hours (`SESSION_HOURS` in `.env`).
 
 ## Known Limitations
 
@@ -177,7 +189,6 @@ Visit http://localhost:5173 for the landing page and sign in; admins land on the
 - CPU-only inference limits throughput to under 10 FPS per detection stage; recognition adds ~2.6s latency per face
 - Evaluation dataset is intentionally small (15 held-out test images) for rapid iteration; results are indicative and methodologically sound but not statistically exhaustive
 - Crowd detection uses a simple frame-count threshold rather than density-aware spatial analysis
-- The PostgreSQL schema (tables for students, staff, classes, visitors, users and WebAuthn credentials) is not yet included in the repository, so a fresh setup needs the tables created by hand
 - Sessions are held in server memory, so restarting the backend signs everyone out
 
 ## Future Work

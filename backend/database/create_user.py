@@ -1,23 +1,31 @@
-﻿import os
+"""Create a sign-in account.
+
+    python backend/database/create_user.py
+
+Asks for a username, password (not echoed), role and full name. For a
+teacher or student, the full name must match their name in the staff or
+students table so their class/profile views find them.
+"""
+import getpass
+import sys
+
 import bcrypt
-import psycopg2
 from dotenv import load_dotenv
 
+sys.path.insert(0, ".")
+from backend.api.db import get_db_connection  # noqa: E402
+
 load_dotenv()
+ROLES = ("admin", "teacher", "student")
 
-def get_db_connection():
-    return psycopg2.connect(
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT"),
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD")
-    )
-
-username = input("Username: ")
-password = input("Password: ")
-role = input("Role (admin/teacher/student): ") or "admin"
-full_name = input("Full name: ")
+username = input("Username: ").strip()
+password = getpass.getpass("Password: ")
+if not username or len(password) < 8:
+    sys.exit("A username and a password of at least 8 characters are required.")
+role = (input("Role (admin/teacher/student) [admin]: ").strip() or "admin").lower()
+if role not in ROLES:
+    sys.exit(f"Role must be one of: {', '.join(ROLES)}")
+full_name = input("Full name: ").strip()
 
 hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
