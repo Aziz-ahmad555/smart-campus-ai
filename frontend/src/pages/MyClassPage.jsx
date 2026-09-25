@@ -13,8 +13,8 @@ import { useApi } from '../lib/useApi'
 export default function MyClassPage() {
   const user = getUser()
   // Roster and activity both come from the teacher's own session.
-  const roster = useApi('/secure/my-class-roster', { auth: true, interval: 15000, initial: { class_name: null, students: [], events: [] } })
-  const { class_name: className, students = [], events = [] } = roster.data
+  const roster = useApi('/secure/my-class-roster', { auth: true, interval: 15000, initial: { class_name: null, students: [], events: [], linked: true } })
+  const { class_name: className, students = [], events = [], linked = true } = roster.data
 
   const today = new Date().toDateString()
   const recent = useMemo(() => events.slice().reverse(), [events])
@@ -34,7 +34,15 @@ export default function MyClassPage() {
 
       {!roster.loading && !roster.error && !className ? (
         <Card>
-          <EmptyState icon={School} title="No class assigned yet" description="Ask an administrator to assign you to a class." />
+          {linked ? (
+            <EmptyState icon={School} title="No class assigned yet" description="Ask an administrator to assign you to a class." />
+          ) : (
+            <EmptyState
+              icon={School}
+              title="Your account isn't linked to a staff record"
+              description="Ask an administrator to link your account to your staff record so your class appears here."
+            />
+          )}
         </Card>
       ) : (
         <>

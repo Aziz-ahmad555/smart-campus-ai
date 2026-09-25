@@ -137,14 +137,15 @@ def client(db):
 
 # ---- helpers ----
 
-def make_user(db, username, role, full_name=None, password="correct-horse"):
+def make_user(db, username, role, full_name=None, password="correct-horse", student_id=None, staff_id=None):
     import bcrypt
 
     hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=4)).decode()
     cur = db.cursor()
     cur.execute(
-        "INSERT INTO users (username, password_hash, role, full_name) VALUES (%s, %s, %s, %s) RETURNING id;",
-        (username, hashed, role, full_name or username.title()),
+        "INSERT INTO users (username, password_hash, role, full_name, student_id, staff_id) "
+        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id;",
+        (username, hashed, role, full_name or username.title(), student_id, staff_id),
     )
     return cur.fetchone()[0]
 
@@ -152,9 +153,9 @@ def make_user(db, username, role, full_name=None, password="correct-horse"):
 @pytest.fixture
 def login(client, db):
     """login(role) -> auth kwargs for that role's fresh session."""
-    def _login(role, username=None, full_name=None):
+    def _login(role, username=None, full_name=None, student_id=None, staff_id=None):
         username = username or f"{role}1"
-        make_user(db, username, role, full_name)
+        make_user(db, username, role, full_name, student_id=student_id, staff_id=staff_id)
         r = client.post("/login", json={"username": username, "password": "correct-horse"})
         assert r.status_code == 200, r.text
         return r.json()["token"]

@@ -12,9 +12,10 @@ import { useApi } from '../lib/useApi'
 
 export default function MyProfilePage() {
   const user = getUser()
-  const activity = useApi('/secure/my-events', { auth: true, interval: 15000, select: (d) => d.events, initial: [] })
+  const activity = useApi('/secure/my-events', { auth: true, interval: 15000, initial: { events: [], linked: true } })
 
-  const events = useMemo(() => activity.data.slice().reverse(), [activity.data])
+  const events = useMemo(() => activity.data.events.slice().reverse(), [activity.data])
+  const linked = activity.data.linked !== false
   const lastEntry = events.find((e) => e.type === 'ENTRY')
   const entries = events.filter((e) => e.type === 'ENTRY').length
   const exits = events.filter((e) => e.type === 'EXIT').length
@@ -44,6 +45,11 @@ export default function MyProfilePage() {
       </Card>
 
       <ErrorBanner message={activity.error} onRetry={activity.reload} className="mb-6" />
+      {!activity.loading && !linked && (
+        <div role="status" className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+          Your account isn&apos;t linked to a student record yet, so no activity can be shown. Ask an administrator to link it.
+        </div>
+      )}
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard

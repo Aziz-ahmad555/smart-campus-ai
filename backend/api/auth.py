@@ -24,7 +24,7 @@ SESSION_TTL_SECONDS = int(float(os.getenv("SESSION_HOURS", "8")) * 3600)
 TICKET_TTL_SECONDS = 60
 STREAM_PURPOSES = ("video", "events")
 
-_sessions = {}   # token -> {user_id, username, role, full_name, expires_at}
+_sessions = {}   # token -> {user_id, username, role, full_name, student_id, staff_id, expires_at}
 _tickets = {}    # ticket -> {token, purpose, expires_at}
 _lock = threading.Lock()
 
@@ -37,6 +37,8 @@ def create_session(user):
             "username": user["username"],
             "role": user["role"],
             "full_name": user["full_name"],
+            "student_id": user.get("student_id"),   # linked person (users.student_id / staff_id)
+            "staff_id": user.get("staff_id"),
             "expires_at": time.time() + SESSION_TTL_SECONDS,
         }
     return token

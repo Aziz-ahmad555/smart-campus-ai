@@ -66,21 +66,23 @@ def get_db_connection():
         password=os.getenv("DB_PASSWORD")
     )
 
-def lookup_student(photo_folder):
+def lookup_person(photo_folder):
+    """Resolve a recognized photo folder to a student or staff record.
+    Returns {"person_type", "person_id", "label"} or None if unknown."""
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute(
-            "SELECT name, roll_number FROM students WHERE photo_folder = %s;",
-            (photo_folder,)
-        )
-        result = cur.fetchone()
+        cur.execute("SELECT id, name, roll_number FROM students WHERE photo_folder = %s;", (photo_folder,))
+        row = cur.fetchone()
+        if row:
+            person = {"person_type": "student", "person_id": row[0], "label": f"{row[1]} ({row[2]})"}
+        else:
+            cur.execute("SELECT id, name, role FROM staff WHERE photo_folder = %s;", (photo_folder,))
+            row = cur.fetchone()
+            person = {"person_type": "staff", "person_id": row[0], "label": f"{row[1]} ({row[2]})"} if row else None
         cur.close()
         conn.close()
-        if result:
-            name, roll_number = result
-            return f"{name} ({roll_number})"
-        return None
+        return person
     except Exception as e:
         print("DB lookup error:", e)
         return None
@@ -179,11 +181,16 @@ async def safe_send(ws, event):
         if ws in connected_websockets:
             connected_websockets.remove(ws)
 
-def add_event(event_type, track_id, label):
+def add_event(event_type, track_id, label, person=None):
+    """person: {"person_type", "person_id"} of the recognized student/staff
+    member, or None (unknown person, crowd alert). Views filter on these IDs,
+    never on the label text."""
     event = {
         "type": event_type,
         "track_id": int(track_id) if track_id is not None else None,
         "label": label,
+        "person_type": person["person_type"] if person else None,
+        "person_id": person["person_id"] if person else None,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
     }
     with events_lock:
@@ -200,7 +207,7 @@ def check_crowd(person_count):
         add_event("CROWD_ALERT", None, f"{person_count} people detected in frame")
         print(f"[CROWD ALERT] {person_count} people detected at {time.strftime('%H:%M:%S')}")
 
-def check_fall(track_id, box_width, box_height, label):
+def check_fall(track_id, box_width, box_height, label, person=None):
     """Heuristic: a standing person's box is tall (h/w > 1.3ish); a fallen person's box
     is wide/short (h/w drops sharply). We watch for a fast transition, not just a static wide box,
     to avoid false positives on people who are simply sitting or crouching slowly."""
@@ -226,7 +233,7 @@ def check_fall(track_id, box_width, box_height, label):
         last_alert = last_fall_alert.get(track_id, 0)
         if (now - last_alert) > FALL_ALERT_COOLDOWN:
             last_fall_alert[track_id] = now
-            add_event("FALL_DETECTED", track_id, label + " — possible fall detected")
+            add_event("FALL_DETECTED", track_id, label + " — possible fall detected", person)
             print(f"[FALL ALERT] Track ID {track_id}: {label} at {time.strftime('%H:%M:%S')} (ratio drop={drop:.2f})")
 
 def run_voting_recognition(track_id):
@@ -245,12 +252,12 @@ def run_voting_recognition(track_id):
             time.sleep(VOTE_SAMPLE_INTERVAL)
 
         vote_counts = Counter(votes)
+        person = None
         if vote_counts:
             winner, count = vote_counts.most_common(1)[0]
             if winner is not None and count >= 2:
-                photo_folder = winner
-                student_info = lookup_student(photo_folder)
-                label = student_info if student_info else photo_folder
+                person = lookup_person(winner)
+                label = person["label"] if person else winner
             else:
                 label = "Unknown"
         else:
@@ -258,8 +265,9 @@ def run_voting_recognition(track_id):
 
         if track_id in known_track_ids:
             known_track_ids[track_id]["label"] = label
+            known_track_ids[track_id]["person"] = person
             known_track_ids[track_id]["status"] = "done"
-            add_event("ENTRY", track_id, label)
+            add_event("ENTRY", track_id, label, person)
             print(f"[ENTRY] Track ID {track_id}: {label} (votes={votes}, scores={[round(s,3) for s in scores]})")
     finally:
         with recognition_results_lock:
@@ -335,7 +343,7 @@ def run_tracking_loop():
                 # Fall detection runs every frame using the cheap bounding-box heuristic
                 box_w = x2 - x1
                 box_h = y2 - y1
-                check_fall(track_id, box_w, box_h, label_text)
+                check_fall(track_id, box_w, box_h, label_text, known_track_ids[track_id].get("person"))
 
                 if label_text == "Identifying...":
                     box_color = (0, 165, 255)
@@ -358,7 +366,7 @@ def run_tracking_loop():
         for track_id in exited_ids:
             label = known_track_ids[track_id]["label"]
             if label != "Identifying...":
-                add_event("EXIT", track_id, label)
+                add_event("EXIT", track_id, label, known_track_ids[track_id].get("person"))
                 print(f"[EXIT] Track ID {track_id}: {label}")
             del known_track_ids[track_id]
             ratio_history.pop(track_id, None)

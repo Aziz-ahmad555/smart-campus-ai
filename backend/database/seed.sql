@@ -5,8 +5,8 @@
 --
 -- User accounts are not seeded: create them with
 --   python backend/database/create_user.py
--- To sign in as the demo teacher, create a teacher account whose full name
--- is "Demo Teacher One".
+-- To sign in as the demo teacher, create a teacher account and link it to
+-- staff record 1 ("Demo Teacher One"); create_user.py asks for the link.
 
 INSERT INTO classes (name, grade_level, section) VALUES
     ('Grade 9 - A',  '9',  'A'),

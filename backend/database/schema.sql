@@ -46,7 +46,10 @@ CREATE TABLE IF NOT EXISTS users (
     username      TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,                 -- bcrypt
     role          TEXT NOT NULL CHECK (role IN ('admin', 'teacher', 'student')),
-    full_name     TEXT
+    full_name     TEXT,
+    -- Which person this account belongs to (see migrations/001).
+    student_id    INTEGER REFERENCES students(id) ON DELETE SET NULL,   -- student accounts
+    staff_id      INTEGER REFERENCES staff(id) ON DELETE SET NULL       -- teacher accounts
 );
 
 CREATE TABLE IF NOT EXISTS webauthn_credentials (

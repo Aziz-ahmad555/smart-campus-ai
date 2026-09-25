@@ -430,8 +430,11 @@ def logout(session=Depends(current_session)):
 
 # ---- Teacher class roster (teacher; derived from the session) ----
 
-def teacher_class(cur, full_name):
-    cur.execute("SELECT class_id FROM staff WHERE name = %s;", (full_name,))
+def teacher_class(cur, staff_id):
+    """The class taught by the staff member linked to this account (users.staff_id)."""
+    if not staff_id:
+        return None, None, []
+    cur.execute("SELECT class_id FROM staff WHERE id = %s;", (staff_id,))
     teacher_row = cur.fetchone()
     if not teacher_row or not teacher_row["class_id"]:
         return None, None, []
@@ -446,7 +449,7 @@ def teacher_class(cur, full_name):
 def get_class_roster(session=Depends(teacher_only)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    _, class_name, students = teacher_class(cur, session["full_name"])
+    _, class_name, students = teacher_class(cur, session["staff_id"])
     cur.close()
     conn.close()
     return {"class_name": class_name, "students": students}
@@ -454,29 +457,35 @@ def get_class_roster(session=Depends(teacher_only)):
 
 # ---- Secure, session-derived personal views ----
 
-@app.get("/secure/my-events")
-def secure_my_events(session=Depends(current_session)):
-    full_name = session["full_name"]
+def events_for(person_type, person_ids):
+    """Recognition events for the given people, matched by ID (never by name)."""
+    ids = set(person_ids)
     with engine.events_lock:
         all_events = list(engine.events_log)
-    my_events = [e for e in all_events if e.get("label") and full_name in e["label"]]
-    return {"events": my_events}
+    return [e for e in all_events if e.get("person_type") == person_type and e.get("person_id") in ids]
+
+
+@app.get("/secure/my-events")
+def secure_my_events(session=Depends(current_session)):
+    """The signed-in person's own events. `linked` is false when the account
+    isn't linked to a student or staff record yet."""
+    if session["student_id"]:
+        return {"events": events_for("student", [session["student_id"]]), "linked": True}
+    if session["staff_id"]:
+        return {"events": events_for("staff", [session["staff_id"]]), "linked": True}
+    return {"events": [], "linked": False}
 
 
 @app.get("/secure/my-class-roster")
 def secure_my_class_roster(session=Depends(teacher_only)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    _, class_name, students = teacher_class(cur, session["full_name"])
+    _, class_name, students = teacher_class(cur, session["staff_id"])
     cur.close()
     conn.close()
 
-    student_names = [s["name"] for s in students]
-    with engine.events_lock:
-        all_events = list(engine.events_log)
-    class_events = [e for e in all_events if e.get("label") and any(name in e["label"] for name in student_names)]
-
-    return {"class_name": class_name, "students": students, "events": class_events}
+    class_events = events_for("student", [s["id"] for s in students])
+    return {"class_name": class_name, "students": students, "events": class_events, "linked": bool(session["staff_id"])}
 
 
 # ---- WebAuthn Fingerprint Authentication ----

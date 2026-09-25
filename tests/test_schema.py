@@ -30,7 +30,7 @@ def test_seed_data_is_served_by_the_api(client, db, login):
 
 def test_seeded_teacher_sees_their_class(client, db, login):
     db.cursor().execute(SEED.read_text(encoding="utf-8"))
-    token = login("teacher", username="teacher1", full_name="Demo Teacher One")
+    token = login("teacher", username="teacher1", full_name="Demo Teacher One", staff_id=1)
     r = client.get("/secure/my-class-roster", **as_user(token))
     assert r.status_code == 200
     assert r.json()["class_name"] == "Grade 9 - A"

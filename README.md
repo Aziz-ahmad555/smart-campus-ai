@@ -154,6 +154,11 @@ psql -U postgres -d smart_campus_db -f backend/database/schema.sql
 psql -U postgres -d smart_campus_db -f backend/database/seed.sql     # optional
 ```
 
+**Upgrading an existing database?** Accounts are now linked to people by ID instead of by name. Run the migration once; it links every account whose full name matches exactly one student or staff member, then lists any accounts left to link by hand:
+```bash
+psql -U postgres -d smart_campus_db -f backend/database/migrations/001_link_users_to_people.sql
+```
+
 ### 4. Configuration
 Copy `.env.example` to `.env` in the project root and set your database password. `.env` is ignored by git.
 
@@ -161,7 +166,7 @@ Copy `.env.example` to `.env` in the project root and set your database password
 ```bash
 python backend/database/create_user.py
 ```
-Choose the `admin` role. For teacher and student accounts, the full name must match their name in the staff or students list. With the seed data, a teacher account named "Demo Teacher One" sees Grade 9 - A.
+Choose the `admin` role. Teacher and student accounts are linked to a person: the script asks for the student's roll number, or the teacher's staff record. With the seed data, a teacher account linked to staff record 1 ("Demo Teacher One") sees Grade 9 - A.
 
 ### 6. Models and face photos
 - `yolov8n.pt` (person detection) downloads automatically on first run.
