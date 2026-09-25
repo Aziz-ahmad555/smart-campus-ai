@@ -160,7 +160,7 @@ psql -U postgres -d smart_campus_db -f backend/database/migrations/001_link_user
 ```
 
 ### 4. Configuration
-Copy `.env.example` to `.env` in the project root and set your database password. `.env` is ignored by git.
+Copy `.env.example` to `.env` in the project root and set your database password. `.env` is ignored by git. The same file sets the session length (`SESSION_HOURS`), the dashboard address used for CORS and fingerprint sign-in (`FRONTEND_ORIGIN`, `WEBAUTHN_RP_ID`) and the camera (`CAMERA_SOURCE`: a webcam index or an `rtsp://` URL); the defaults suit local development.
 
 ### 5. An admin account
 ```bash

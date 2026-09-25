@@ -14,6 +14,8 @@ from ultralytics import YOLO
 load_dotenv()
 
 KNOWN_FACES_DB = "data/known_faces"
+# Webcam index ("0") or a stream URL (e.g. rtsp://...), from CAMERA_SOURCE in .env.
+CAMERA_SOURCE = os.getenv("CAMERA_SOURCE", "0")
 EXIT_TIMEOUT_SECONDS = 5
 CROWD_THRESHOLD = 3
 CROWD_ALERT_COOLDOWN = 10
@@ -29,7 +31,6 @@ FALL_ALERT_COOLDOWN = 15          # seconds between repeated fall alerts for the
 
 person_model = YOLO("yolov8n.pt")
 face_model = YOLO("backend/detection/models/yolov8n-face.pt")
-pose_model = YOLO("yolov8n-pose.pt")
 
 known_track_ids = {}
 events_log = []
@@ -288,9 +289,10 @@ def get_latest_frame():
 
 def run_tracking_loop():
     global current_person_count
-    cap = cv2.VideoCapture(0)
+    source = int(CAMERA_SOURCE) if CAMERA_SOURCE.isdigit() else CAMERA_SOURCE
+    cap = cv2.VideoCapture(source)
     if not cap.isOpened():
-        print("Error: Could not open webcam.")
+        print(f"Error: Could not open camera source {CAMERA_SOURCE!r}.")
         return
 
     print("Background tracking loop started.")

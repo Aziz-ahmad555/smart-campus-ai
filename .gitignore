@@ -15,3 +15,7 @@ data/known_faces/*/
 data/test_images/
 data/test_videos/
 !data/README.md
+
+# Partial downloads and local tool config
+*.part
+.claude/

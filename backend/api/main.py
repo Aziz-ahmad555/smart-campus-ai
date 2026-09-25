@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import os
 import time
 from datetime import datetime, timedelta
 from typing import Optional
@@ -29,11 +30,14 @@ from backend.api.auth import admin_only, current_session, teacher_only
 from backend.api.db import get_db_connection
 from backend.tracking import engine
 
+# Where the dashboard is served from (CORS and WebAuthn). Set in .env.
+FRONTEND_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("FRONTEND_ORIGIN", "http://localhost:5173").split(",") if o.strip()]
+
 app = FastAPI(title="Smart Campus AI API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=FRONTEND_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -490,9 +494,11 @@ def secure_my_class_roster(session=Depends(teacher_only)):
 
 # ---- WebAuthn Fingerprint Authentication ----
 
-RP_ID = "localhost"
+# WebAuthn: the relying-party ID is the dashboard's domain (no scheme/port),
+# and the expected origin is where the dashboard is served from.
+RP_ID = os.getenv("WEBAUTHN_RP_ID", "localhost")
 RP_NAME = "Sentra Campus Intelligence"
-ORIGIN = "http://localhost:5173"
+ORIGIN = FRONTEND_ORIGINS[0]
 
 webauthn_challenges = {}  # temporary storage: token -> challenge bytes
 
