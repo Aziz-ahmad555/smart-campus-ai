@@ -1,6 +1,8 @@
 import asyncio
 import base64
+import hashlib
 import os
+import re
 import secrets
 import time
 from datetime import datetime, timedelta
@@ -11,6 +13,7 @@ import psycopg2
 import psycopg2.extras
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from webauthn import (
@@ -26,7 +29,7 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from backend.api import auth, conflicts, users
+from backend.api import auth, conflicts, logs, users
 from backend.api.auth import admin_only, current_session, teacher_only
 from backend.api.db import get_db_connection
 from backend.tracking import engine, event_store
@@ -36,7 +39,9 @@ FRONTEND_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("FRONTEND_ORIGIN", 
 if not FRONTEND_ORIGINS or any("*" in o for o in FRONTEND_ORIGINS):
     raise RuntimeError("FRONTEND_ORIGIN must list the dashboard's exact origin(s); '*' is not allowed.")
 
-app = FastAPI(title="Smart Campus AI API")
+logs.install()                            # stream tickets never reach uvicorn's logs
+
+app = FastAPI(title="Smart Campus AI API", docs_url=None, redoc_url=None)   # served below, with their own CSP
 # Any foreign-key refusal an endpoint doesn't handle itself becomes a 409.
 app.add_exception_handler(psycopg2.errors.ForeignKeyViolation, conflicts.unhandled_fk_violation)
 app.include_router(users.router)          # /users: admin account management
@@ -59,6 +64,41 @@ async def security_headers(request, call_next):
     response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
     response.headers.setdefault("Cache-Control", "no-store")     # API data is personal; don't cache it
     return response
+
+
+# ---- API docs ----
+# The API's CSP (default-src 'none') blocks everything a docs page needs, so
+# /docs and /redoc get their own policy: only the CDN files FastAPI's pages
+# load, their inline script by hash, and the schema from this server.
+CDN = "https://cdn.jsdelivr.net"
+FAVICON = "https://fastapi.tiangolo.com"
+
+
+def with_csp(page, policy):
+    scripts = re.findall(r"<script>(.*?)</script>", page.body.decode("utf-8"), re.DOTALL)
+    hashes = " ".join("'sha256-%s'" % base64.b64encode(hashlib.sha256(s.encode("utf-8")).digest()).decode()
+                      for s in scripts)
+    page.headers["Content-Security-Policy"] = policy.format(inline_scripts=hashes)
+    return page
+
+
+@app.get("/docs", include_in_schema=False)
+def swagger_docs():
+    return with_csp(
+        get_swagger_ui_html(openapi_url=app.openapi_url, title=f"{app.title} - Swagger UI"),
+        f"default-src 'none'; script-src {CDN} {{inline_scripts}}; style-src {CDN} 'unsafe-inline'; "
+        f"img-src 'self' data: {FAVICON}; connect-src 'self'; frame-ancestors 'none'",
+    )
+
+
+@app.get("/redoc", include_in_schema=False)
+def redoc_docs():
+    return with_csp(
+        get_redoc_html(openapi_url=app.openapi_url, title=f"{app.title} - ReDoc"),
+        f"default-src 'none'; script-src {CDN} {{inline_scripts}}; worker-src blob:; "
+        "style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
+        f"img-src 'self' data: {FAVICON} https://cdn.redoc.ly; connect-src 'self'; frame-ancestors 'none'",
+    )
 
 
 # Text limits match the database columns (VARCHAR(n)), so over-long input is

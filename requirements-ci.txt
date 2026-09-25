@@ -11,3 +11,6 @@ numpy==2.4.6
 opencv-python-headless==4.10.0.84
 pytest==9.1.1
 httpx==0.28.1
+# A real uvicorn server checks that stream tickets are redacted in its logs
+uvicorn==0.52.4
+websockets==17.1

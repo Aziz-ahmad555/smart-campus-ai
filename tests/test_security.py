@@ -243,3 +243,90 @@ def test_no_passwords_or_tokens_in_logs(client, db, two_users, capfd):
     out, err = capfd.readouterr()
     for secret in ("Sup3r-Secret-Pa55", "wrong-Pa55-guess", token, ticket, challenge):
         assert secret not in out + err
+
+
+SERVE = """
+import sys, threading, types
+engine = types.ModuleType("backend.tracking.engine")          # no camera or models
+engine.connected_websockets, engine.main_event_loop = [], None
+engine.events_log, engine.events_lock = [], threading.Lock()
+engine.start_background_tracking = lambda: None
+engine.wait_for_frame = lambda seq, timeout=1.0: (seq + 1, b"jpeg")
+sys.modules["backend.tracking.engine"] = engine
+import uvicorn
+from backend.tracking import event_store
+event_store.start_retention = lambda *a, **k: None
+uvicorn.run("backend.api.main:app", host="127.0.0.1", port=int(sys.argv[1]))   # uvicorn's default logging
+"""
+
+
+def test_stream_tickets_are_redacted_in_uvicorns_logs(db):
+    """The test client bypasses uvicorn, so this runs the API under a real
+    uvicorn server (its own process, default logging, the throwaway test
+    database) and reads what it logs: the access log (GET /video-feed) and
+    the WebSocket handshake lines (/ws/events, accepted and refused)."""
+    import time
+
+    pytest.importorskip("uvicorn")
+    websockets_sync = pytest.importorskip("websockets.sync.client")
+    import httpx
+
+    from tests.conftest import _free_port
+
+    make_user(db, "admin1", "admin", password="Sup3r-Secret-Pa55")
+    port = _free_port()
+    base = f"127.0.0.1:{port}"
+    server = subprocess.Popen([sys.executable, "-c", SERVE, str(port)], cwd=ROOT,
+                              env={**os.environ, "PYTHONPATH": str(ROOT)},
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        for _ in range(200):
+            try:
+                httpx.get(f"http://{base}/health", timeout=1)
+                break
+            except httpx.HTTPError:
+                time.sleep(0.1)
+        token = httpx.post(f"http://{base}/login", json={"username": "admin1", "password": "Sup3r-Secret-Pa55"}).json()["token"]
+        ticket = lambda purpose: httpx.post(f"http://{base}/stream-ticket", params={"purpose": purpose},
+                                            headers={"Authorization": f"Bearer {token}"}).json()["ticket"]
+        video, events, forged = ticket("video"), ticket("events"), "forged-ticket-value-123"
+
+        with httpx.stream("GET", f"http://{base}/video-feed", params={"ticket": video}, timeout=5) as r:
+            assert r.status_code == 200
+        assert httpx.get(f"http://{base}/video-feed", params={"ticket": forged}, timeout=5).status_code == 401
+        with websockets_sync.connect(f"ws://{base}/ws/events?ticket={events}", open_timeout=5):
+            pass                                                      # accepted
+        with pytest.raises(Exception):
+            websockets_sync.connect(f"ws://{base}/ws/events?ticket={forged}", open_timeout=5)   # refused
+        time.sleep(0.5)                                               # let the last lines be written
+    finally:
+        server.terminate()
+        logged = server.communicate(timeout=30)[0]
+
+    assert '"GET /video-feed?ticket=[redacted] HTTP/1.1" 200' in logged
+    assert '"GET /video-feed?ticket=[redacted] HTTP/1.1" 401' in logged
+    assert '"WebSocket /ws/events?ticket=[redacted]" [accepted]' in logged
+    assert '"WebSocket /ws/events?ticket=[redacted]" 403' in logged
+    for secret in (video, events, forged, token, "Sup3r-Secret-Pa55"):
+        assert secret not in logged
+
+
+def test_api_docs_get_their_own_csp(client):
+    """/docs and /redoc load FastAPI's Swagger UI / ReDoc files from the CDN and
+    run one inline script, so they get a policy allowing exactly that (by
+    hash); every other response keeps default-src 'none'."""
+    import base64
+    import re
+
+    r = client.get("/docs")
+    assert r.status_code == 200 and "swagger-ui-bundle.js" in r.text
+    csp = r.headers["content-security-policy"]
+    inline = re.search(r"<script>(.*?)</script>", r.text, re.DOTALL).group(1)
+    digest = base64.b64encode(hashlib.sha256(inline.encode()).digest()).decode()
+    assert f"script-src https://cdn.jsdelivr.net 'sha256-{digest}'" in csp
+    assert "'unsafe-inline'" not in csp.split("script-src")[1].split(";")[0]    # scripts: CDN + that hash only
+    assert "connect-src 'self'" in csp and "frame-ancestors 'none'" in csp
+
+    assert "script-src https://cdn.jsdelivr.net" in client.get("/redoc").headers["content-security-policy"]
+    assert client.get("/openapi.json").headers["content-security-policy"] == "default-src 'none'; frame-ancestors 'none'"
+    assert client.get("/health").headers["content-security-policy"] == "default-src 'none'; frame-ancestors 'none'"

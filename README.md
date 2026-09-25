@@ -212,8 +212,8 @@ Open http://localhost:5173 and sign in. Admins land on the live dashboard, teach
 - **Failed sign-ins** (password or fingerprint): 5 failures for one account lock it for 15 minutes; one client address gets 20 failures across all accounts. Locked sign-ins get HTTP 429 with `Retry-After`. Set `LOGIN_MAX_ATTEMPTS` / `LOGIN_LOCKOUT_MINUTES` in `.env`.
 - **Fingerprint sign-in (WebAuthn)** only accepts a credential registered to the account signing in. Challenges are single-use, expire after 2 minutes and are tied to one attempt.
 - **Sessions** use a Bearer token in the `Authorization` header (never the URL) and expire after `SESSION_HOURS`. The camera feed and live events use 60-second single-use tickets instead.
-- **CORS** allows only the dashboard origin(s) in `FRONTEND_ORIGIN`; `*` is refused at startup. API responses send `nosniff`, `DENY` framing, `no-referrer`, a restrictive CSP and `no-store`.
-- **Logs** never contain passwords, session tokens or stream tickets (a test checks this). Recognized people's names are printed to the backend console, so treat console logs as personal data.
+- **CORS** allows only the dashboard origin(s) in `FRONTEND_ORIGIN`; `*` is refused at startup. API responses send `nosniff`, `DENY` framing, `no-referrer`, a restrictive CSP and `no-store`. The API docs (`/docs`, `/redoc`) get their own CSP that allows only the CDN files and inline script those pages need.
+- **Logs** never contain passwords, session tokens or stream tickets. Tickets travel in the URL (`?ticket=`), so a filter replaces them with `[redacted]` in uvicorn's access and WebSocket log lines; tests check this with the test client and with a real uvicorn server. A reverse proxy in front of the API keeps its own access log, so configure it not to log query strings for `/video-feed` and `/ws/events`. Recognized people's names are printed to the backend console, so treat console logs as personal data.
 - **Behind a reverse proxy**, sign-in limits see the proxy's address unless it forwards the client IP. Configure uvicorn's `--proxy-headers` and `--forwarded-allow-ips` for your proxy.
 
 ## Data retention
@@ -231,7 +231,7 @@ Recognition events are attendance records linked to biometric (face) recognition
 
 ## Running tests
 
-**Backend** (pytest, 217 tests): sign-in and session expiry, 401/403 on every protected endpoint, stream tickets, create/edit/delete for students, staff, classes and visitors, 409 conflicts and 422 length limits, the security fixes (fingerprint sign-in bound to its own account, lockout, no username discovery), admin account management, event retention, the database schema and seed data, the migrations (a copy of the production structure migrated with 001-003 must equal `schema.sql`), ID-based event matching, and event storage (background writes that never block, outage recovery, per-role reads and pagination).
+**Backend** (pytest, 232 tests): sign-in and session expiry, 401/403 on every protected endpoint, stream tickets (and their redaction from uvicorn's logs), API docs CSP, create/edit/delete for students, staff, classes and visitors, 409 conflicts and 422 length limits, the security fixes (fingerprint sign-in bound to its own account, lockout, no username discovery), admin account management, event retention, the database schema and seed data, the migrations (a copy of the production structure migrated with 001-003 must equal `schema.sql`), ID-based event matching, and event storage (background writes that never block, outage recovery, per-role reads and pagination).
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest tests
@@ -258,6 +258,7 @@ npm test
 - The failed-sign-in lockout counters are also in memory: a backend restart clears them, and they aren't shared between several backend processes
 - Recognized people's names are printed to the backend console (entry, exit and alert lines), so console output and any log files made from it contain personal data and should be protected accordingly
 - The session token is kept in the browser's `localStorage`, so a cross-site scripting bug in the dashboard could expose it. React escapes page content by default, but a production deployment should also send a Content-Security-Policy for the dashboard from its web server
+- Stream tickets are redacted from uvicorn's own logs, but any other layer that logs full URLs (a reverse proxy, a load balancer) will record them. They are single-use and expire after 60 seconds, which limits the risk
 - Behind a reverse proxy, the sign-in limits count the proxy's address instead of each client's unless the proxy forwards the client IP and uvicorn is started with `--proxy-headers --forwarded-allow-ips=<proxy>`
 
 ## Future Work
