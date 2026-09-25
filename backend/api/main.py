@@ -25,7 +25,7 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from backend.api import auth
+from backend.api import auth, conflicts
 from backend.api.auth import admin_only, current_session, teacher_only
 from backend.api.db import get_db_connection
 from backend.tracking import engine, event_store
@@ -34,6 +34,8 @@ from backend.tracking import engine, event_store
 FRONTEND_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("FRONTEND_ORIGIN", "http://localhost:5173").split(",") if o.strip()]
 
 app = FastAPI(title="Smart Campus AI API")
+# Any foreign-key refusal an endpoint doesn't handle itself becomes a 409.
+app.add_exception_handler(psycopg2.errors.ForeignKeyViolation, conflicts.unhandled_fk_violation)
 
 app.add_middleware(
     CORSMiddleware,
@@ -44,25 +46,24 @@ app.add_middleware(
 )
 
 
+# Text limits match the database columns (VARCHAR(n)), so over-long input is
+# rejected with 422 before it reaches the database.
 class StudentCreate(BaseModel):
-    name: str
-    roll_number: str
-    photo_folder: str
+    name: str = Field(min_length=1, max_length=100)
+    roll_number: str = Field(min_length=1, max_length=50)
+    photo_folder: str = Field(min_length=1, max_length=100)
     class_id: Optional[int] = None
 
 
-class StudentUpdate(BaseModel):
-    name: str
-    roll_number: str
-    photo_folder: str
-    class_id: Optional[int] = None
+class StudentUpdate(StudentCreate):
+    pass
 
 
 class VisitorCreate(BaseModel):
-    name: str
-    cnic_or_id: Optional[str] = None
-    reason: Optional[str] = None
-    host_name: Optional[str] = None
+    name: str = Field(min_length=1, max_length=100)
+    cnic_or_id: Optional[str] = Field(None, max_length=50)
+    reason: Optional[str] = Field(None, max_length=255)
+    host_name: Optional[str] = Field(None, max_length=100)
     allowed_minutes: int = Field(60, gt=0, le=1440)   # 1 minute to 24 hours
 
 
@@ -177,6 +178,8 @@ def create_student(student: StudentCreate, session=Depends(admin_only)):
     except psycopg2.errors.UniqueViolation:
         conn.rollback()
         raise HTTPException(status_code=400, detail="Roll number already exists")
+    except psycopg2.errors.ForeignKeyViolation as e:
+        raise conflicts.conflict(e, conn)
     finally:
         cur.close()
         conn.close()
@@ -186,14 +189,21 @@ def create_student(student: StudentCreate, session=Depends(admin_only)):
 def update_student(student_id: int, student: StudentUpdate, session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute(
-        "UPDATE students SET name = %s, roll_number = %s, photo_folder = %s, class_id = %s WHERE id = %s RETURNING id, name, roll_number, photo_folder, created_at, class_id;",
-        (student.name, student.roll_number, student.photo_folder, student.class_id, student_id)
-    )
-    updated = cur.fetchone()
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute(
+            "UPDATE students SET name = %s, roll_number = %s, photo_folder = %s, class_id = %s WHERE id = %s RETURNING id, name, roll_number, photo_folder, created_at, class_id;",
+            (student.name, student.roll_number, student.photo_folder, student.class_id, student_id)
+        )
+        updated = cur.fetchone()
+        conn.commit()
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail="Roll number already exists")
+    except psycopg2.errors.ForeignKeyViolation as e:
+        raise conflicts.conflict(e, conn)
+    finally:
+        cur.close()
+        conn.close()
     if not updated:
         raise HTTPException(status_code=404, detail="Student not found")
     return {"student": updated}
@@ -203,11 +213,15 @@ def update_student(student_id: int, student: StudentUpdate, session=Depends(admi
 def delete_student(student_id: int, session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("DELETE FROM students WHERE id = %s RETURNING id;", (student_id,))
-    deleted = cur.fetchone()
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute("DELETE FROM students WHERE id = %s RETURNING id;", (student_id,))
+        deleted = cur.fetchone()
+        conn.commit()
+    except psycopg2.errors.ForeignKeyViolation as e:     # still referenced: say what to fix
+        raise conflicts.conflict(e, conn, deleting=("students", student_id))
+    finally:
+        cur.close()
+        conn.close()
     if not deleted:
         raise HTTPException(status_code=404, detail="Student not found")
     return {"deleted": True}
@@ -287,9 +301,9 @@ def delete_visitor(visitor_id: int, session=Depends(admin_only)):
 # ---- Classes (admin) ----
 
 class ClassCreate(BaseModel):
-    name: str
-    grade_level: Optional[str] = None
-    section: Optional[str] = None
+    name: str = Field(min_length=1, max_length=50)
+    grade_level: Optional[str] = Field(None, max_length=20)
+    section: Optional[str] = Field(None, max_length=10)
 
 
 @app.get("/classes")
@@ -322,11 +336,15 @@ def create_class(cls: ClassCreate, session=Depends(admin_only)):
 def delete_class(class_id: int, session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("DELETE FROM classes WHERE id = %s RETURNING id;", (class_id,))
-    deleted = cur.fetchone()
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute("DELETE FROM classes WHERE id = %s RETURNING id;", (class_id,))
+        deleted = cur.fetchone()
+        conn.commit()
+    except psycopg2.errors.ForeignKeyViolation as e:     # still referenced: say what to fix
+        raise conflicts.conflict(e, conn, deleting=("classes", class_id))
+    finally:
+        cur.close()
+        conn.close()
     if not deleted:
         raise HTTPException(status_code=404, detail="Class not found")
     return {"deleted": True}
@@ -335,17 +353,14 @@ def delete_class(class_id: int, session=Depends(admin_only)):
 # ---- Staff (admin) ----
 
 class StaffCreate(BaseModel):
-    name: str
-    role: str
-    department: Optional[str] = None
-    photo_folder: str
+    name: str = Field(min_length=1, max_length=100)
+    role: str = Field(min_length=1, max_length=50)
+    department: Optional[str] = Field(None, max_length=100)
+    photo_folder: str = Field(min_length=1, max_length=100)
 
 
-class StaffUpdate(BaseModel):
-    name: str
-    role: str
-    department: Optional[str] = None
-    photo_folder: str
+class StaffUpdate(StaffCreate):
+    pass
 
 
 @app.get("/staff")
@@ -395,11 +410,15 @@ def update_staff(staff_id: int, person: StaffUpdate, session=Depends(admin_only)
 def delete_staff(staff_id: int, session=Depends(admin_only)):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("DELETE FROM staff WHERE id = %s RETURNING id;", (staff_id,))
-    deleted = cur.fetchone()
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute("DELETE FROM staff WHERE id = %s RETURNING id;", (staff_id,))
+        deleted = cur.fetchone()
+        conn.commit()
+    except psycopg2.errors.ForeignKeyViolation as e:     # still referenced: say what to fix
+        raise conflicts.conflict(e, conn, deleting=("staff", staff_id))
+    finally:
+        cur.close()
+        conn.close()
     if not deleted:
         raise HTTPException(status_code=404, detail="Staff member not found")
     return {"deleted": True}
@@ -408,8 +427,8 @@ def delete_staff(staff_id: int, session=Depends(admin_only)):
 # ---- Authentication ----
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=50)
+    password: str = Field(max_length=256)
 
 
 @app.post("/login")
@@ -573,7 +592,7 @@ def webauthn_register_complete(body: RegisterCompleteRequest, session=Depends(cu
 
 
 @app.post("/webauthn/login/begin")
-def webauthn_login_begin(username: str):
+def webauthn_login_begin(username: str = Query(max_length=50)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT id FROM users WHERE username = %s;", (username,))
@@ -607,7 +626,7 @@ def webauthn_login_begin(username: str):
 
 
 class LoginCompleteRequest(BaseModel):
-    username: str
+    username: str = Field(max_length=50)
     credential: dict
 
 

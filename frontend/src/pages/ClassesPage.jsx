@@ -60,6 +60,7 @@ export default function ClassesPage() {
       classes.reload()
       students.reload()
     } catch (err) {
+      setDeleting(null)             // e.g. 409: the message says what to fix first
       toast.error(err.message)
     } finally {
       setBusyDelete(false)
@@ -159,10 +160,10 @@ export default function ClassesPage() {
         <form id="class-form" onSubmit={create} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {formError && <ErrorBanner message={formError} className="sm:col-span-2" />}
           <div className="sm:col-span-2">
-            <Input label="Class name" required value={form.name} onChange={set('name')} placeholder="e.g. Grade 9 - A" />
+            <Input label="Class name" required maxLength={50} value={form.name} onChange={set('name')} placeholder="e.g. Grade 9 - A" />
           </div>
-          <Input label="Grade level" value={form.grade_level} onChange={set('grade_level')} placeholder="e.g. 9" />
-          <Input label="Section" value={form.section} onChange={set('section')} placeholder="e.g. A" />
+          <Input label="Grade level" maxLength={20} value={form.grade_level} onChange={set('grade_level')} placeholder="e.g. 9" />
+          <Input label="Section" maxLength={10} value={form.section} onChange={set('section')} placeholder="e.g. A" />
         </form>
       </Modal>
 
@@ -174,7 +175,9 @@ export default function ClassesPage() {
         title="Delete class?"
         message={
           deleting
-            ? `${deleting.name} will be deleted.${deletingCount ? ` ${deletingCount} student${deletingCount === 1 ? ' is' : 's are'} assigned to it.` : ''} This can't be undone.`
+            ? deletingCount
+              ? `${deleting.name} still has ${deletingCount} student${deletingCount === 1 ? '' : 's'} assigned, so it can't be deleted until they are reassigned.`
+              : `${deleting.name} will be deleted. This can't be undone.`
             : ''
         }
       />

@@ -114,6 +114,7 @@ export default function LoginPage() {
             <ErrorBanner message={error} />
             <Input
               label="Username"
+              maxLength={50}
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"

@@ -9,14 +9,16 @@
 -- schema.sql already):
 --   psql -U postgres -d smart_campus_db -f backend/database/migrations/001_link_users_to_people.sql
 --
--- Recognition events are held in the backend's memory, not in the database,
--- so there are no stored event rows to migrate; events recorded after the
--- upgrade carry IDs.
+-- Run this before 002 (which starts storing events, each carrying these IDs)
+-- and 003. Events recorded before 002 were only kept in memory, so there are
+-- no older event rows to migrate.
 
 BEGIN;
 
-ALTER TABLE users ADD COLUMN IF NOT EXISTS student_id INTEGER REFERENCES students(id) ON DELETE SET NULL;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_id   INTEGER REFERENCES staff(id)    ON DELETE SET NULL;
+-- (No ON DELETE action: a student/staff member with an account can't be
+-- deleted until the account is removed or unlinked; the API answers 409.)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS student_id INTEGER REFERENCES students(id);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_id   INTEGER REFERENCES staff(id);
 
 -- Backfill: link an account only when its full name matches exactly one
 -- record. Ambiguous or missing matches stay NULL (listed below).

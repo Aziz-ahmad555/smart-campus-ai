@@ -82,6 +82,7 @@ export default function StaffPage() {
       setDeleting(null)
       staff.reload()
     } catch (err) {
+      setDeleting(null)             // e.g. 409: the message says what to fix first
       toast.error(err.message)
     } finally {
       setBusyDelete(false)
@@ -173,15 +174,16 @@ export default function StaffPage() {
       >
         <form id="staff-form" onSubmit={save} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {formError && <ErrorBanner message={formError} className="sm:col-span-2" />}
-          <Input label="Full name" required value={form.name} onChange={set('name')} placeholder="Full name" autoComplete="off" />
+          <Input label="Full name" required maxLength={100} value={form.name} onChange={set('name')} placeholder="Full name" autoComplete="off" />
           <Select label="Role" required value={form.role} onChange={set('role')}>
             <option value="">Select a role</option>
             {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
           </Select>
-          <Input label="Department" value={form.department} onChange={set('department')} placeholder="e.g. Science, Maintenance" />
+          <Input label="Department" maxLength={100} value={form.department} onChange={set('department')} placeholder="e.g. Science, Maintenance" />
           <Input
             label="Photo folder"
             required
+            maxLength={100}
             value={form.photo_folder}
             onChange={set('photo_folder')}
             placeholder="e.g. KashifAli"

@@ -79,6 +79,7 @@ export default function StudentsPage() {
       setDeleting(null)
       students.reload()
     } catch (err) {
+      setDeleting(null)             // e.g. 409: the message says what to fix first
       toast.error(err.message)
     } finally {
       setBusyDelete(false)
@@ -177,8 +178,8 @@ export default function StudentsPage() {
       >
         <form id="student-form" onSubmit={save} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {formError && <ErrorBanner message={formError} className="sm:col-span-2" />}
-          <Input label="Full name" required value={form.name} onChange={set('name')} placeholder="e.g. Aziz Ahmad" autoComplete="off" />
-          <Input label="Roll number" required value={form.roll_number} onChange={set('roll_number')} placeholder="e.g. CS-002" autoComplete="off" />
+          <Input label="Full name" required maxLength={100} value={form.name} onChange={set('name')} placeholder="e.g. Jane Doe" autoComplete="off" />
+          <Input label="Roll number" required maxLength={50} value={form.roll_number} onChange={set('roll_number')} placeholder="e.g. CS-002" autoComplete="off" />
           <Select label="Class" value={form.class_id} onChange={set('class_id')}>
             <option value="">Unassigned</option>
             {classes.data.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -186,6 +187,7 @@ export default function StudentsPage() {
           <Input
             label="Photo folder"
             required
+            maxLength={100}
             value={form.photo_folder}
             onChange={set('photo_folder')}
             placeholder="e.g. AzizAhmad"

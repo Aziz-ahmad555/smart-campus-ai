@@ -37,9 +37,11 @@ def test_seeded_teacher_sees_their_class(client, db, login):
     assert [s["name"] for s in r.json()["students"]] == ["Demo Student Alpha", "Demo Student Bravo"]
 
 
-def test_deleting_a_class_unassigns_its_students(client, db, login):
+def test_deleting_a_class_in_use_is_refused(client, db, login):
     db.cursor().execute(SEED.read_text(encoding="utf-8"))
     token = login("admin")
-    assert client.delete("/classes/1", **as_user(token)).status_code == 200
+    r = client.delete("/classes/1", **as_user(token))                   # 2 students + the demo teacher
+    assert r.status_code == 409
+    assert r.json()["detail"] == "This class still has 2 students and 1 teacher assigned. Reassign them first."
     students = client.get("/students", **as_user(token)).json()["students"]
-    assert students[0]["class_id"] is None                                  # ON DELETE SET NULL
+    assert students[0]["class_id"] == 1                                   # nothing changed

@@ -145,3 +145,38 @@ describe('MyProfilePage history', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Load older events' })).not.toBeInTheDocument())
   })
 })
+
+describe('StudentsPage conflicts and limits', () => {
+  const student = { id: 7, name: 'Demo Student Alpha', roll_number: 'DEMO-001', photo_folder: 'DemoStudentAlpha', class_name: null, created_at: '2026-09-01T10:00:00' }
+  const conflict = "This student has a login account ('alpha'). Remove the account or unlink it from this person before deleting them."
+
+  function mockApi() {
+    return vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options = {}) => {
+      if (options.method === 'DELETE') return new Response(JSON.stringify({ detail: conflict }), { status: 409 })
+      const body = String(url).includes('/students') ? { students: [student] } : { classes: [] }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+  }
+
+  it('shows the 409 message when a delete is refused', async () => {
+    signIn('admin')
+    mockApi()
+    renderAt('/students', <StudentsPage />)
+    ;(await screen.findByRole('button', { name: 'Delete Demo Student Alpha' })).click()
+    ;(await screen.findByRole('button', { name: 'Delete' })).click()
+
+    expect(await screen.findByText(conflict)).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByText('Demo Student Alpha')).toBeInTheDocument()      // still listed
+  })
+
+  it('limits form fields to the database column lengths', async () => {
+    signIn('admin')
+    mockApi()
+    renderAt('/students', <StudentsPage />)
+    ;(await screen.findByRole('button', { name: 'Add student' })).click()
+    expect(await screen.findByLabelText(/Full name/)).toHaveAttribute('maxLength', '100')
+    expect(screen.getByLabelText(/Roll number/)).toHaveAttribute('maxLength', '50')
+    expect(screen.getByLabelText(/Photo folder/)).toHaveAttribute('maxLength', '100')
+  })
+})

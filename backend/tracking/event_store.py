@@ -13,6 +13,7 @@ import threading
 import time
 from datetime import datetime
 
+import psycopg2.errors
 import psycopg2.extras
 
 from backend.api.db import get_db_connection
@@ -32,7 +33,7 @@ _stop = threading.Event()
 _thread = None
 _unwritten = 0                    # queued or in a batch, not yet in the database
 _count_lock = threading.Lock()
-stats = {"written": 0, "dropped": 0, "failed_batches": 0}
+stats = {"written": 0, "dropped": 0, "failed_batches": 0, "unlinked": 0}
 
 INSERT_SQL = (
     "INSERT INTO events (event_type, student_id, staff_id, label, track_id, camera, confidence, created_at) VALUES %s"
@@ -64,12 +65,32 @@ def enqueue(event):
         stats["dropped"] += 1
 
 
+def _unlinked(row):
+    # (event_type, student_id, staff_id, ...) with the person link removed
+    return (row[0], None, None) + row[3:]
+
+
 def write_batch(events):
+    """One multi-row INSERT. If the database refuses it because a person was
+    deleted after they were recognized, write row by row and keep those
+    events without the link (the label still says who it was) instead of
+    retrying the whole batch forever."""
     global _unwritten
+    rows = [to_row(e) for e in events]
     conn = get_db_connection()
     try:
-        with conn, conn.cursor() as cur:
-            psycopg2.extras.execute_values(cur, INSERT_SQL, [to_row(e) for e in events])
+        try:
+            with conn, conn.cursor() as cur:
+                psycopg2.extras.execute_values(cur, INSERT_SQL, rows)
+        except psycopg2.errors.ForeignKeyViolation:
+            for row in rows:
+                try:
+                    with conn, conn.cursor() as cur:
+                        psycopg2.extras.execute_values(cur, INSERT_SQL, [row])
+                except psycopg2.errors.ForeignKeyViolation:
+                    with conn, conn.cursor() as cur:
+                        psycopg2.extras.execute_values(cur, INSERT_SQL, [_unlinked(row)])
+                    stats["unlinked"] += 1
     finally:
         conn.close()
     stats["written"] += len(events)

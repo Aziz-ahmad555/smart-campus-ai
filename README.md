@@ -155,13 +155,19 @@ psql -U postgres -d smart_campus_db -f backend/database/schema.sql
 psql -U postgres -d smart_campus_db -f backend/database/seed.sql     # optional
 ```
 
-**Upgrading an existing database?** Run the migrations once, in order. Both are safe to re-run.
+**Upgrading an existing database?** Back it up, then run the three migrations once, in this order. Each one runs in a single transaction (all or nothing) and is safe to re-run.
 - `001` links accounts to people by ID instead of by name. It links every account whose full name matches exactly one student or staff member, then lists any accounts left to link by hand.
 - `002` creates the `events` table that stores the event history.
+- `003` applies the stricter rules: required fields, allowed user roles, positive visit durations, unique fingerprint credentials. Run the read-only pre-check query at the bottom of the file first; every count should be 0.
 ```bash
-psql -U postgres -d smart_campus_db -f backend/database/migrations/001_link_users_to_people.sql
-psql -U postgres -d smart_campus_db -f backend/database/migrations/002_events_table.sql
+pg_dump -U postgres -d smart_campus_db -f smart_campus_db_backup.sql
+psql -U postgres -d smart_campus_db -v ON_ERROR_STOP=1 -f backend/database/migrations/001_link_users_to_people.sql
+psql -U postgres -d smart_campus_db -v ON_ERROR_STOP=1 -f backend/database/migrations/002_events_table.sql
+psql -U postgres -d smart_campus_db -v ON_ERROR_STOP=1 -f backend/database/migrations/003_tighten_constraints.sql
 ```
+After these, the database has exactly the structure `schema.sql` creates (a test checks this against a copy of the production structure).
+
+**Deleting things that are still in use.** The database refuses to delete a class that still has students or a teacher, a student or staff member who has a login account, or a user with registered fingerprints. The dashboard then shows why, for example "This class still has 12 students assigned. Reassign them first." (HTTP 409). Text fields are limited to the database column lengths; longer input is rejected (HTTP 422).
 
 ### 4. Configuration
 Copy `.env.example` to `.env` in the project root and set your database password. `.env` is ignored by git. The same file sets the session length (`SESSION_HOURS`), the dashboard address used for CORS and fingerprint sign-in (`FRONTEND_ORIGIN`, `WEBAUTHN_RP_ID`) and the camera (`CAMERA_SOURCE`: a webcam index or an `rtsp://` URL; `CAMERA_NAME` labels its events); the defaults suit local development.
@@ -193,7 +199,7 @@ Open http://localhost:5173 and sign in. Admins land on the live dashboard, teach
 
 ## Running tests
 
-**Backend** (pytest, 112 tests): sign-in and session expiry, 401/403 on every protected endpoint, stream tickets, create/edit/delete for students, staff, classes and visitors, the database schema and seed data, ID-based event matching, and event storage (background writes that never block, outage recovery, per-role reads and pagination).
+**Backend** (pytest, 165 tests): sign-in and session expiry, 401/403 on every protected endpoint, stream tickets, create/edit/delete for students, staff, classes and visitors, 409 conflicts and 422 length limits, the database schema and seed data, the migrations (a copy of the production structure migrated with 001-003 must equal `schema.sql`), ID-based event matching, and event storage (background writes that never block, outage recovery, per-role reads and pagination).
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest tests
@@ -201,7 +207,7 @@ python -m pytest tests
 - No webcam, face model or real database is used. The camera/recognition engine is replaced by a fake, and each run creates a throwaway PostgreSQL cluster in a temp folder with `initdb`, loads `schema.sql` and deletes it afterwards. Your own database is never touched.
 - The PostgreSQL command-line tools must be installed. They're found on your PATH, in `C:\Program Files\PostgreSQL\*\bin`, or via the `PG_BIN` environment variable. To use an existing empty database instead, set `TEST_DB_HOST`, `TEST_DB_PORT`, `TEST_DB_NAME`, `TEST_DB_USER` and `TEST_DB_PASSWORD`.
 
-**Frontend** (Vitest + Testing Library, 10 tests): the login page, route protection by role and session expiry, a list page's error state, the API client's auth header and 401 handling, and loading older history.
+**Frontend** (Vitest + Testing Library, 12 tests): the login page, route protection by role and session expiry, a list page's error state, the API client's auth header and 401 handling, loading older history, a refused delete's message, and form length limits.
 ```bash
 cd frontend
 npm test

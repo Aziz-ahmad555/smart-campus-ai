@@ -226,10 +226,10 @@ export default function VisitorsPage() {
       >
         <form id="visitor-form" onSubmit={checkIn} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {formError && <ErrorBanner message={formError} className="sm:col-span-2" />}
-          <Input label="Full name" required value={form.name} onChange={set('name')} placeholder="Visitor's name" autoComplete="off" />
-          <Input label="CNIC / ID number" value={form.cnic_or_id} onChange={set('cnic_or_id')} placeholder="Optional" autoComplete="off" />
-          <Input label="Visiting" value={form.host_name} onChange={set('host_name')} placeholder="e.g. Mr. Ahmed, Principal" />
-          <Input label="Reason for visit" value={form.reason} onChange={set('reason')} placeholder="e.g. Parent meeting" />
+          <Input label="Full name" required maxLength={100} value={form.name} onChange={set('name')} placeholder="Visitor's name" autoComplete="off" />
+          <Input label="CNIC / ID number" maxLength={50} value={form.cnic_or_id} onChange={set('cnic_or_id')} placeholder="Optional" autoComplete="off" />
+          <Input label="Visiting" maxLength={100} value={form.host_name} onChange={set('host_name')} placeholder="e.g. Mr. Ahmed, Principal" />
+          <Input label="Reason for visit" maxLength={255} value={form.reason} onChange={set('reason')} placeholder="e.g. Parent meeting" />
           <Input
             label="Allowed duration (minutes)"
             type="number"
