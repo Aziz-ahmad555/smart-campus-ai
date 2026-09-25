@@ -1,0 +1,29 @@
+# Backend and evaluation dependencies (Python 3.11).
+# Pinned to the versions this project was developed and evaluated with.
+
+# API
+fastapi==0.141.1
+uvicorn==0.52.4
+websockets==17.1
+pydantic==2.13.4
+python-dotenv==1.2.3
+
+# Database and auth
+psycopg2-binary==2.9.12
+bcrypt==5.0.0
+webauthn==3.0.0
+
+# Vision pipeline
+ultralytics==8.4.129
+lap==0.5.13
+opencv-python==4.10.0.84
+numpy==2.4.6
+deepface==0.0.100
+mtcnn==1.0.0
+retina-face==0.0.18
+tensorflow==2.21.0
+tf_keras==2.21.0
+
+# Evaluation charts
+matplotlib==3.11.1
+pandas==3.0.5

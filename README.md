@@ -1,17 +1,22 @@
-﻿# Smart Campus AI — Real-Time Intelligent Surveillance & Access System
+# Smart Campus AI — Real-Time Intelligent Surveillance & Access System
 
 An end-to-end AI perception pipeline that detects people, recognizes faces, tracks identities across frames, and logs entry/exit events in real time — built from scratch with YOLOv8, DeepFace, PostgreSQL, FastAPI, and React.
 
 This is not just a face recognition demo. It is a full system architecture: **camera → detection → recognition → database → tracking → API → live dashboard**, backed by structured evaluation of accuracy, latency, and robustness under real-world conditions — including an iterative optimization process that improved recognition accuracy from 66.7% to 86.7%.
 
-## Live Demo
+## What's in the app
 
-- **Landing page:** Product overview and feature highlights
-- **Dashboard:** Real-time occupancy, traffic charts, and live event log
+- **Landing page:** product overview with the measured evaluation results
+- **Live dashboard (admin):** camera feed with detection overlays, foot-traffic chart, and a filterable, searchable event log streamed over WebSocket
+- **Directory (admin):** students, staff, classes and visitors, with add/edit dialogs, search and filters
+- **Visitor management (admin):** check-in with an allowed duration, live countdown, and overstay highlighting
+- **My class (teacher):** class roster and the class's recent entries and exits
+- **My profile (student):** the student's own entry/exit timeline
+- **Sign-in:** username and password, or fingerprint / Windows Hello (WebAuthn); light and dark themes
 
 ## Architecture
 
-\\\
+```
 RTSP/Webcam Feed
       |
 YOLOv8 Person Detection
@@ -27,7 +32,7 @@ ByteTrack Entry/Exit Tracking
 FastAPI Backend (REST + WebSocket)
       |
 React Real-Time Dashboard
-\\\
+```
 
 ## Features
 
@@ -37,8 +42,12 @@ React Real-Time Dashboard
 - **Student identification** — recognized faces resolved to real student records via PostgreSQL
 - **Entry/exit tracking** — persistent IDs across frames using ByteTrack, with timestamped event logging
 - **Crowd detection** — threshold-based alerts when occupancy exceeds a configurable limit, with cooldown to prevent alert spam
+- **Fall detection** — flags a possible fall when a tracked person's bounding box changes sharply from tall to wide (heuristic, not a trained model)
+- **Role-based access** — admin, teacher and student accounts, bcrypt-hashed passwords, and admin-only write endpoints
+- **Fingerprint / Windows Hello sign-in** — WebAuthn passkeys registered per device
+- **Visitor, staff and class management** — directory data the recognition pipeline and dashboards use
 - **REST + WebSocket API** — FastAPI backend exposing live recognition/tracking events, pushed in real time (not polled)
-- **Real-time dashboard** — production-style React interface with live stat cards, traffic visualization, and event log
+- **Real-time dashboard** — React interface with a shared design system, live stat cards, traffic chart, event log, responsive layout and light/dark themes
 - **Landing page** — product-style marketing page with feature highlights and evaluation stats
 - **Evaluation suite** — accuracy, FAR/FRR, and FPS benchmarking with automated chart generation
 
@@ -50,8 +59,8 @@ React Real-Time Dashboard
 | Face Recognition | DeepFace — MTCNN detector, Facenet512 embeddings, RetinaFace fallback |
 | Tracking | ByteTrack |
 | Database | PostgreSQL |
-| Backend | FastAPI, Uvicorn, WebSockets |
-| Frontend | React (Vite), Tailwind CSS, Recharts, React Router |
+| Backend | FastAPI, Uvicorn, WebSockets, bcrypt, WebAuthn |
+| Frontend | React 19 (Vite), Tailwind CSS v4, Recharts, React Router, Lucide icons |
 | Language | Python 3.11, JavaScript |
 | Environment | CPU-only (no dedicated GPU) |
 
@@ -95,7 +104,7 @@ All benchmarks were run on integrated (non-dedicated) CPU graphics. Real-time pe
 
 ## Project Structure
 
-\\\
+```
 smart-campus-ai/
 ├── backend/
 │   ├── detection/       # YOLO person and face detection
@@ -105,15 +114,20 @@ smart-campus-ai/
 │   └── database/        # PostgreSQL connection/testing
 ├── frontend/
 │   ├── src/
-│   │   ├── components/  # Sidebar, StatCard, TrafficChart, EventsTable, LandingPage
-│   │   ├── App.jsx       # Main dashboard
-│   │   └── main.jsx      # Routing
+│   │   ├── pages/       # One file per screen (dashboard, students, visitors, login, ...)
+│   │   ├── components/
+│   │   │   ├── ui/        # Design system: buttons, fields, dialogs, badges, tables, toasts
+│   │   │   ├── layout/    # App shell: role-aware sidebar and mobile menu
+│   │   │   └── dashboard/ # Camera feed, traffic chart, event log
+│   │   ├── lib/         # API client, session, theme, live events, formatting
+│   │   ├── App.jsx      # Routes (signed-in pages load on demand)
+│   │   └── main.jsx     # Entry point
 ├── data/
 │   ├── known_faces/     # Reference photos per identity (22 for primary test subject)
 │   └── test_images/     # Held-out evaluation test set (5 conditions)
 ├── evaluation/           # Benchmark scripts, results, charts
 └── README.md
-\\\
+```
 
 ## Setup
 
@@ -123,34 +137,36 @@ smart-campus-ai/
 - PostgreSQL 18+
 
 ### Backend
-\\\ash
+```bash
 python -m venv venv
 venv\Scripts\activate        # Windows
 pip install -r requirements.txt
-\\\
+```
 
-Create a \.env\ file in the project root:
-\\\
+Create a `.env` file in the project root:
+```
 DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=smart_campus_db
 DB_USER=postgres
 DB_PASSWORD=your_password
-\\\
+```
 
 Run the API:
-\\\ash
+```bash
 uvicorn backend.api.main:app --reload
-\\\
+```
 
 ### Frontend
-\\\ash
+```bash
 cd frontend
 npm install
 npm run dev
-\\\
+```
 
-Visit \http://localhost:5173\ for the landing page, or \http://localhost:5173/dashboard\ for the live dashboard directly.
+The dashboard talks to `http://localhost:8000` by default. To use another backend, copy `frontend/.env.example` to `frontend/.env` and set `VITE_API_URL`.
+
+Visit http://localhost:5173 for the landing page and sign in; admins land on the live dashboard, teachers on their class, students on their own profile.
 
 ## Known Limitations
 
@@ -159,6 +175,8 @@ Visit \http://localhost:5173\ for the landing page, or \http://localhost:5173/da
 - CPU-only inference limits throughput to under 10 FPS per detection stage; recognition adds ~2.6s latency per face
 - Evaluation dataset is intentionally small (15 held-out test images) for rapid iteration; results are indicative and methodologically sound but not statistically exhaustive
 - Crowd detection uses a simple frame-count threshold rather than density-aware spatial analysis
+- The PostgreSQL schema (tables for students, staff, classes, visitors, users and WebAuthn credentials) is not yet included in the repository, so a fresh setup needs the tables created by hand
+- Sessions are held in server memory, so restarting the backend signs everyone out
 
 ## Future Work
 
