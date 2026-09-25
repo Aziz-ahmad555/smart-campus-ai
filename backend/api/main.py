@@ -26,7 +26,7 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
-from backend.api import auth, conflicts
+from backend.api import auth, conflicts, users
 from backend.api.auth import admin_only, current_session, teacher_only
 from backend.api.db import get_db_connection
 from backend.tracking import engine, event_store
@@ -39,6 +39,7 @@ if not FRONTEND_ORIGINS or any("*" in o for o in FRONTEND_ORIGINS):
 app = FastAPI(title="Smart Campus AI API")
 # Any foreign-key refusal an endpoint doesn't handle itself becomes a 409.
 app.add_exception_handler(psycopg2.errors.ForeignKeyViolation, conflicts.unhandled_fk_violation)
+app.include_router(users.router)          # /users: admin account management
 
 app.add_middleware(
     CORSMiddleware,

@@ -15,6 +15,7 @@ ADMIN_ONLY = [
     ("GET", "/classes"), ("POST", "/classes"), ("DELETE", "/classes/1"),
     ("GET", "/visitors"), ("POST", "/visitors"), ("PUT", "/visitors/1/checkout"), ("DELETE", "/visitors/1"),
     ("GET", "/events"), ("POST", "/stream-ticket?purpose=video"),
+    ("GET", "/users"), ("PUT", "/users/1/link"), ("DELETE", "/users/1/fingerprints"), ("DELETE", "/users/1"),
 ]
 TEACHER_ONLY = [("GET", "/my-class-roster"), ("GET", "/secure/my-class-roster")]
 ANY_SIGNED_IN = [("GET", "/me"), ("GET", "/secure/my-events"), ("POST", "/logout")]

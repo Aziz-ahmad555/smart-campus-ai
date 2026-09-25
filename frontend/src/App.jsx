@@ -11,6 +11,7 @@ const StudentsPage = lazy(() => import('./pages/StudentsPage.jsx'))
 const StaffPage = lazy(() => import('./pages/StaffPage.jsx'))
 const ClassesPage = lazy(() => import('./pages/ClassesPage.jsx'))
 const VisitorsPage = lazy(() => import('./pages/VisitorsPage.jsx'))
+const UsersPage = lazy(() => import('./pages/UsersPage.jsx'))
 const MyProfilePage = lazy(() => import('./pages/MyProfilePage.jsx'))
 const MyClassPage = lazy(() => import('./pages/MyClassPage.jsx'))
 
@@ -35,6 +36,7 @@ export default function App() {
         <Route path="/visitors" element={only(['admin'], <VisitorsPage />)} />
         <Route path="/staff" element={only(['admin'], <StaffPage />)} />
         <Route path="/classes" element={only(['admin'], <ClassesPage />)} />
+        <Route path="/users" element={only(['admin'], <UsersPage />)} />
         <Route path="/my-profile" element={only(['student'], <MyProfilePage />)} />
         <Route path="/my-class" element={only(['teacher'], <MyClassPage />)} />
         <Route path="*" element={<NotFoundPage />} />

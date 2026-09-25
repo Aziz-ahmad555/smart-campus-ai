@@ -180,3 +180,51 @@ describe('StudentsPage conflicts and limits', () => {
     expect(screen.getByLabelText(/Photo folder/)).toHaveAttribute('maxLength', '100')
   })
 })
+
+describe('UsersPage', () => {
+  const accounts = [
+    { id: 1, username: 'admin', role: 'admin', full_name: 'Test admin', created_at: '2026-09-01T10:00:00', student_id: null, staff_id: null, linked_name: null, fingerprints: 0 },
+    { id: 2, username: 'alpha', role: 'student', full_name: 'Alpha', created_at: '2026-09-01T10:00:00', student_id: null, staff_id: null, linked_name: null, fingerprints: 2 },
+  ]
+  const students = [{ id: 5, name: 'Demo Student Alpha', roll_number: 'DEMO-001' }]
+  const refusal = 'This user has 2 registered fingerprints for sign-in. Remove their fingerprints first, then delete the account.'
+
+  function mockApi(calls) {
+    return vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options = {}) => {
+      const path = new URL(String(url)).pathname
+      calls.push([options.method || 'GET', path, options.body])
+      if (options.method === 'DELETE') return new Response(JSON.stringify({ detail: refusal }), { status: 409 })
+      if (options.method === 'PUT') return new Response(JSON.stringify({ user: { ...accounts[1], student_id: 5, linked_name: 'Demo Student Alpha' } }), { status: 200 })
+      const body = path === '/users' ? { users: accounts } : path === '/students' ? { students } : { staff: [] }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+  }
+
+  it('flags unlinked accounts and links one to a student', async () => {
+    saveSession({ token: 't', user: { username: 'admin', role: 'admin' }, expires_at: inAnHour() })
+    const calls = []
+    mockApi(calls)
+    const { default: UsersPage } = await import('../pages/UsersPage.jsx')
+    renderAt('/users', <UsersPage />)
+
+    expect(await screen.findByText('Not linked')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Delete admin' })).not.toBeInTheDocument()   // not yourself
+    screen.getByRole('button', { name: 'Link alpha' }).click()
+    const select = await screen.findByLabelText('Student')
+    await waitFor(() => expect(select.querySelectorAll('option')).toHaveLength(2))
+    select.value = '5'
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    screen.getByRole('button', { name: 'Save link' }).click()
+    await waitFor(() => expect(calls.some(([m, p, b]) => m === 'PUT' && p === '/users/2/link' && JSON.parse(b).person_id === 5)).toBe(true))
+  })
+
+  it('shows why a delete was refused', async () => {
+    saveSession({ token: 't', user: { username: 'admin', role: 'admin' }, expires_at: inAnHour() })
+    mockApi([])
+    const { default: UsersPage } = await import('../pages/UsersPage.jsx')
+    renderAt('/users', <UsersPage />)
+    ;(await screen.findByRole('button', { name: 'Delete alpha' })).click()
+    ;(await screen.findByRole('button', { name: 'Delete' })).click()
+    expect(await screen.findByText(refusal)).toBeInTheDocument()
+  })
+})

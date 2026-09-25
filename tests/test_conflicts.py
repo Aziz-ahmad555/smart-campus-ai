@@ -96,7 +96,7 @@ def test_user_with_fingerprints_explained_with_count(db):
             raise conflicts.conflict(refused.value, db, deleting=("users", user_id))
         assert http.value.status_code == 409
         assert http.value.detail == ("This user has 2 registered fingerprints for sign-in. "
-                                     "Remove their fingerprint credentials before deleting the account.")
+                                     "Remove their fingerprints first, then delete the account.")
     finally:
         db.rollback()
         db.autocommit = True

@@ -11,6 +11,7 @@ This is not just a face recognition demo. It is a full system architecture: **ca
 - **Landing page:** product overview with the measured evaluation results
 - **Live dashboard (admin):** camera feed with detection overlays, foot-traffic chart, and a filterable, searchable event log streamed over WebSocket
 - **Directory (admin):** students, staff, classes and visitors, with add/edit dialogs, search and filters
+- **Accounts (admin):** sign-in accounts, linking each teacher or student account to its staff or student record, removing fingerprints, and deleting accounts
 - **Visitor management (admin):** check-in with an allowed duration, live countdown, and overstay highlighting
 - **My class (teacher):** class roster and the class's recent entries and exits
 - **My profile (student):** the student's own entry/exit timeline
@@ -178,7 +179,7 @@ Copy `.env.example` to `.env` in the project root and set your database password
 ```bash
 python backend/database/create_user.py
 ```
-Choose the `admin` role. Teacher and student accounts are linked to a person: the script asks for the student's roll number, or the teacher's staff record. With the seed data, a teacher account linked to staff record 1 ("Demo Teacher One") sees Grade 9 - A.
+Choose the `admin` role. Teacher and student accounts are linked to a person: the script asks for the student's roll number, or the teacher's staff record. Admins can also change or remove links later on the **Accounts** page. With the seed data, a teacher account linked to staff record 1 ("Demo Teacher One") sees Grade 9 - A.
 
 ### 6. Models and face photos
 - `yolov8n.pt` (person detection) downloads automatically on first run.

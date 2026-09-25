@@ -51,7 +51,7 @@ def person_has_account(cur, table, row_id):
 def user_has_fingerprints(cur, user_id):
     n = _count(cur, "SELECT count(*) FROM webauthn_credentials WHERE user_id = %s;", (user_id,))
     return (f"This user has {_plural(n, 'registered fingerprint')} for sign-in. "
-            "Remove their fingerprint credentials before deleting the account.")
+            "Remove their fingerprints first, then delete the account.")
 
 
 # Deleting a row that others still point at (no counts: used when the

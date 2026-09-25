@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { startRegistration } from '@simplewebauthn/browser'
 import {
-  LayoutDashboard, GraduationCap, Briefcase, School, UserCheck, UserRound, Users,
+  LayoutDashboard, GraduationCap, Briefcase, School, UserCheck, UserRound, Users, KeyRound,
   Fingerprint, Moon, Sun, LogOut, Menu, X,
 } from 'lucide-react'
 import { api } from '../../lib/api'
@@ -24,6 +24,7 @@ const NAV = {
         { label: 'Visitors', icon: UserCheck, to: '/visitors' },
       ],
     },
+    { section: 'Administration', items: [{ label: 'Accounts', icon: KeyRound, to: '/users' }] },
   ],
   teacher: [{ section: 'Teaching', items: [{ label: 'My class', icon: Users, to: '/my-class' }] }],
   student: [{ section: 'Account', items: [{ label: 'My profile', icon: UserRound, to: '/my-profile' }] }],

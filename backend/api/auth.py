@@ -190,3 +190,22 @@ def check_login_allowed(username, ip):
             detail=f"Too many failed sign-in attempts. Try again in {minutes} minute{'s' if minutes != 1 else ''}.",
             headers={"Retry-After": str(wait)},
         )
+
+
+# ---- Keeping live sessions in step with account changes ----
+
+def end_user_sessions(user_id):
+    """Sign a user out everywhere (e.g. their account was deleted)."""
+    with _lock:
+        tokens = [t for t, s in _sessions.items() if s["user_id"] == user_id]
+    for token in tokens:
+        end_session(token)
+    return len(tokens)
+
+
+def update_user_link(user_id, student_id, staff_id):
+    """Apply a new person link to the user's open sessions right away."""
+    with _lock:
+        for s in _sessions.values():
+            if s["user_id"] == user_id:
+                s["student_id"], s["staff_id"] = student_id, staff_id
