@@ -1,16 +1,30 @@
-# React + Vite
+# Sentra frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React 19 + Vite + Tailwind CSS v4 dashboard for Smart Campus AI. See the [project README](../README.md) for the full system.
 
-Currently, two official plugins are available:
+```bash
+npm install
+npm run dev      # http://localhost:5173
+npm run build    # production build in dist/
+npm run lint     # oxlint
+```
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+The backend address defaults to `http://localhost:8000`. To change it, copy `.env.example` to `.env` and set `VITE_API_URL`.
 
-## React Compiler
+## Structure
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+| Folder | Contents |
+|---|---|
+| `src/pages/` | One component per screen: landing, login, dashboard, students, staff, classes, visitors, my class, my profile, 404 |
+| `src/components/ui/` | Design system: `Button`, `Input`/`Select`, `Modal`/`ConfirmDialog`, `Badge`, `Card`, `Table`, `StatCard`, `Tabs`, toasts, empty/error/loading states |
+| `src/components/layout/` | `AppShell`: role-aware sidebar, mobile menu, theme toggle, fingerprint setup, sign-out |
+| `src/components/dashboard/` | Camera feed, foot-traffic chart, event log |
+| `src/lib/` | API client (`api.js`), session storage, theme, `useApi` and `useLiveEvents` hooks, formatting helpers |
 
-## Expanding the Oxlint configuration
+## Conventions
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+- All requests go through `lib/api.js`; authenticated calls pass `{ auth: true }`.
+- Every data view has a loading state, an empty state, and an error state with retry.
+- Confirmations use `ConfirmDialog` and feedback uses toasts, never `window.alert` or `window.confirm`.
+- Colours carry meaning: green for entries and on-campus, amber for crowd alerts, red for falls, overstays and destructive actions.
+- The theme follows the OS until the user picks one; the choice is saved in `localStorage`.

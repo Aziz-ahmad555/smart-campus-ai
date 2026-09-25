@@ -1,21 +1,18 @@
-﻿import { Navigate } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
+import { getToken, getUser, homePathFor } from '../lib/session'
 
+// Client-side routing guard only; the backend enforces roles on every request.
 function ProtectedRoute({ children, allowedRoles }) {
-  const token = localStorage.getItem('sentra_token')
-  const userJson = localStorage.getItem('sentra_user')
-  const user = userJson ? JSON.parse(userJson) : null
+  const location = useLocation()
+  const user = getUser()
 
-  if (!token || !user) {
-    return <Navigate to="/login" replace />
+  if (!getToken() || !user) {
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />
   }
-
   if (allowedRoles && !allowedRoles.includes(user.role)) {
-    // Logged in, but wrong role for this page — send them to their own home
-    if (user.role === 'teacher') return <Navigate to="/my-class" replace />
-    if (user.role === 'student') return <Navigate to="/my-profile" replace />
-    return <Navigate to="/dashboard" replace />
+    // Signed in, but this page belongs to another role: go to their own home.
+    return <Navigate to={homePathFor(user.role)} replace />
   }
-
   return children
 }
 
