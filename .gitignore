@@ -19,3 +19,5 @@ data/test_videos/
 # Partial downloads and local tool config
 *.part
 .claude/
+
+*.dump
