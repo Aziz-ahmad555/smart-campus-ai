@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import os
+import secrets
 import time
 from datetime import datetime, timedelta
 from typing import Optional
@@ -8,7 +9,7 @@ from typing import Optional
 import bcrypt
 import psycopg2
 import psycopg2.extras
-from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -32,6 +33,8 @@ from backend.tracking import engine, event_store
 
 # Where the dashboard is served from (CORS and WebAuthn). Set in .env.
 FRONTEND_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("FRONTEND_ORIGIN", "http://localhost:5173").split(",") if o.strip()]
+if not FRONTEND_ORIGINS or any("*" in o for o in FRONTEND_ORIGINS):
+    raise RuntimeError("FRONTEND_ORIGIN must list the dashboard's exact origin(s); '*' is not allowed.")
 
 app = FastAPI(title="Smart Campus AI API")
 # Any foreign-key refusal an endpoint doesn't handle itself becomes a 409.
@@ -39,11 +42,22 @@ app.add_exception_handler(psycopg2.errors.ForeignKeyViolation, conflicts.unhandl
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=FRONTEND_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=FRONTEND_ORIGINS,          # never "*"
+    allow_credentials=False,                 # auth is a Bearer header, not cookies
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+    response.headers.setdefault("Cache-Control", "no-store")     # API data is personal; don't cache it
+    return response
 
 
 # Text limits match the database columns (VARCHAR(n)), so over-long input is
@@ -431,8 +445,30 @@ class LoginRequest(BaseModel):
     password: str = Field(max_length=256)
 
 
+# Checked when the username doesn't exist, so unknown and known usernames
+# take the same time to reject (no username discovery by timing).
+_DUMMY_HASH = bcrypt.hashpw(b"no-such-user", bcrypt.gensalt()).decode()
+
+
+def password_matches(password, password_hash):
+    raw = password.encode("utf-8")
+    if len(raw) > 72:          # bcrypt's limit: no stored password can be longer
+        return False
+    try:
+        return bcrypt.checkpw(raw, password_hash.encode("utf-8"))
+    except ValueError:         # malformed stored hash
+        return False
+
+
+def client_ip(request):
+    return request.client.host if request.client else "unknown"
+
+
 @app.post("/login")
-def login(credentials: LoginRequest):
+def login(credentials: LoginRequest, request: Request):
+    ip = client_ip(request)
+    auth.check_login_allowed(credentials.username, ip)          # 429 while locked out
+
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM users WHERE username = %s;", (credentials.username,))
@@ -440,12 +476,12 @@ def login(credentials: LoginRequest):
     cur.close()
     conn.close()
 
-    if not user:
+    ok = password_matches(credentials.password, user["password_hash"] if user else _DUMMY_HASH)
+    if not (user and ok):
+        auth.login_limiter.failed(credentials.username, ip)
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    if not bcrypt.checkpw(credentials.password.encode("utf-8"), user["password_hash"].encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-
+    auth.login_limiter.succeeded(credentials.username)
     token = auth.create_session(user)
     session = auth.get_session(token)
     return {"token": token, "expires_at": auth.session_expiry(session), "user": auth.public_user(session)}
@@ -528,7 +564,23 @@ RP_ID = os.getenv("WEBAUTHN_RP_ID", "localhost")
 RP_NAME = "Sentra Campus Intelligence"
 ORIGIN = FRONTEND_ORIGINS[0]
 
-webauthn_challenges = {}  # temporary storage: token -> challenge bytes
+CHALLENGE_TTL_SECONDS = 120
+_challenges = {}   # key -> (challenge bytes, username or None, expires_at)
+
+
+def store_challenge(key, challenge, username=None):
+    now = time.time()
+    for k in [k for k, v in _challenges.items() if v[2] < now]:
+        del _challenges[k]
+    _challenges[key] = (challenge, username, now + CHALLENGE_TTL_SECONDS)
+
+
+def take_challenge(key):
+    """Single use: returns (challenge, username) once, if not expired."""
+    entry = _challenges.pop(key, None)
+    if not entry or entry[2] < time.time():
+        return None, None
+    return entry[0], entry[1]
 
 
 def b64_encode(data: bytes) -> str:
@@ -552,8 +604,7 @@ def webauthn_register_begin(session=Depends(current_session)):
             user_verification=UserVerificationRequirement.REQUIRED,
         ),
     )
-
-    webauthn_challenges[session["token"]] = options.challenge
+    store_challenge("register:" + session["token"], options.challenge)
     return {"options": options_to_json(options)}
 
 
@@ -563,9 +614,9 @@ class RegisterCompleteRequest(BaseModel):
 
 @app.post("/webauthn/register/complete")
 def webauthn_register_complete(body: RegisterCompleteRequest, session=Depends(current_session)):
-    expected_challenge = webauthn_challenges.get(session["token"])
+    expected_challenge, _ = take_challenge("register:" + session["token"])
     if not expected_challenge:
-        raise HTTPException(status_code=400, detail="No pending registration challenge")
+        raise HTTPException(status_code=400, detail="The fingerprint setup request expired. Please try again.")
 
     try:
         verification = verify_registration_response(
@@ -575,81 +626,94 @@ def webauthn_register_complete(body: RegisterCompleteRequest, session=Depends(cu
             expected_rp_id=RP_ID,
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Registration verification failed: {e}")
+        print(f"[webauthn] registration rejected for user #{session['user_id']}: {type(e).__name__}")
+        raise HTTPException(status_code=400, detail="Fingerprint setup could not be verified. Please try again.")
 
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO webauthn_credentials (user_id, credential_id, public_key, sign_count) VALUES (%s, %s, %s, %s);",
-        (session["user_id"], verification.credential_id, verification.credential_public_key, verification.sign_count)
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    webauthn_challenges.pop(session["token"], None)
+    try:
+        cur.execute(
+            "INSERT INTO webauthn_credentials (user_id, credential_id, public_key, sign_count) VALUES (%s, %s, %s, %s);",
+            (session["user_id"], verification.credential_id, verification.credential_public_key, verification.sign_count)
+        )
+        conn.commit()
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        raise HTTPException(status_code=409, detail="This fingerprint is already registered.")
+    finally:
+        cur.close()
+        conn.close()
     return {"registered": True}
+
+
+NOT_SET_UP = "Fingerprint sign-in isn't set up for this account."
 
 
 @app.post("/webauthn/login/begin")
 def webauthn_login_begin(username: str = Query(max_length=50)):
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("SELECT id FROM users WHERE username = %s;", (username,))
-    user = cur.fetchone()
-    if not user:
-        cur.close()
-        conn.close()
-        raise HTTPException(status_code=404, detail="User not found")
-
-    cur.execute("SELECT credential_id FROM webauthn_credentials WHERE user_id = %s;", (user["id"],))
+    cur.execute(
+        "SELECT c.credential_id FROM webauthn_credentials c JOIN users u ON u.id = c.user_id WHERE u.username = %s;",
+        (username,),
+    )
     creds = cur.fetchall()
     cur.close()
     conn.close()
 
+    # Same answer for an unknown user and a user without fingerprints, so
+    # this can't be used to find out which usernames exist.
     if not creds:
-        raise HTTPException(status_code=400, detail="No fingerprint registered for this user")
-
-    allow_credentials = [
-        PublicKeyCredentialDescriptor(id=bytes(c["credential_id"])) for c in creds
-    ]
+        raise HTTPException(status_code=400, detail=NOT_SET_UP)
 
     options = generate_authentication_options(
         rp_id=RP_ID,
-        allow_credentials=allow_credentials,
+        allow_credentials=[PublicKeyCredentialDescriptor(id=bytes(c["credential_id"])) for c in creds],
         user_verification=UserVerificationRequirement.REQUIRED,
     )
-
-    login_challenge_key = "login_" + username
-    webauthn_challenges[login_challenge_key] = options.challenge
-    return {"options": options_to_json(options)}
+    # A random id per attempt: nobody can replace someone else's pending challenge.
+    challenge_id = secrets.token_urlsafe(24)
+    store_challenge("login:" + challenge_id, options.challenge, username)
+    return {"options": options_to_json(options), "challenge_id": challenge_id}
 
 
 class LoginCompleteRequest(BaseModel):
     username: str = Field(max_length=50)
+    challenge_id: str = Field(max_length=64)
     credential: dict
 
 
 @app.post("/webauthn/login/complete")
-def webauthn_login_complete(body: LoginCompleteRequest):
-    login_challenge_key = "login_" + body.username
-    expected_challenge = webauthn_challenges.get(login_challenge_key)
-    if not expected_challenge:
-        raise HTTPException(status_code=400, detail="No pending login challenge")
+def webauthn_login_complete(body: LoginCompleteRequest, request: Request):
+    ip = client_ip(request)
+    auth.check_login_allowed(body.username, ip)
+
+    expected_challenge, challenged_user = take_challenge("login:" + body.challenge_id)
+    if not expected_challenge or challenged_user != body.username:
+        raise HTTPException(status_code=400, detail="The sign-in request expired. Please try again.")
+
+    try:
+        cred_id_bytes = b64_decode(str(body.credential["rawId"]))
+    except (KeyError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid fingerprint response.")
 
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM users WHERE username = %s;", (body.username,))
     user = cur.fetchone()
-
-    cred_id_bytes = b64_decode(body.credential["rawId"])
-    cur.execute("SELECT * FROM webauthn_credentials WHERE credential_id = %s;", (cred_id_bytes,))
-    stored_cred = cur.fetchone()
+    stored_cred = None
+    if user:
+        # The credential must belong to THIS account: a valid fingerprint
+        # registered to someone else must never sign in as this user.
+        cur.execute("SELECT * FROM webauthn_credentials WHERE credential_id = %s AND user_id = %s;",
+                    (cred_id_bytes, user["id"]))
+        stored_cred = cur.fetchone()
     cur.close()
     conn.close()
 
-    if not user or not stored_cred:
-        raise HTTPException(status_code=400, detail="Credential not recognized")
+    if not stored_cred:
+        auth.login_limiter.failed(body.username, ip)
+        raise HTTPException(status_code=401, detail="Fingerprint not recognized for this account.")
 
     try:
         verification = verify_authentication_response(
@@ -661,7 +725,9 @@ def webauthn_login_complete(body: LoginCompleteRequest):
             credential_current_sign_count=stored_cred["sign_count"],
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Authentication failed: {e}")
+        auth.login_limiter.failed(body.username, ip)
+        print(f"[webauthn] sign-in rejected for user #{user['id']}: {type(e).__name__}")
+        raise HTTPException(status_code=401, detail="Fingerprint sign-in failed.")
 
     conn = get_db_connection()
     cur = conn.cursor()
@@ -670,7 +736,7 @@ def webauthn_login_complete(body: LoginCompleteRequest):
     cur.close()
     conn.close()
 
+    auth.login_limiter.succeeded(body.username)
     token = auth.create_session(user)
-    webauthn_challenges.pop(login_challenge_key, None)
     session = auth.get_session(token)
     return {"token": token, "expires_at": auth.session_expiry(session), "user": auth.public_user(session)}

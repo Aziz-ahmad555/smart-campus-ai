@@ -197,6 +197,16 @@ The dashboard talks to `http://localhost:8000` by default. To use another backen
 
 Open http://localhost:5173 and sign in. Admins land on the live dashboard, teachers on their class, students on their own profile. Sessions last 8 hours (`SESSION_HOURS` in `.env`).
 
+## Security
+
+- **Passwords** are hashed with bcrypt (cost 12). Unknown usernames take as long to reject as wrong passwords, so login can't be used to discover accounts.
+- **Failed sign-ins** (password or fingerprint): 5 failures for one account lock it for 15 minutes; one client address gets 20 failures across all accounts. Locked sign-ins get HTTP 429 with `Retry-After`. Set `LOGIN_MAX_ATTEMPTS` / `LOGIN_LOCKOUT_MINUTES` in `.env`.
+- **Fingerprint sign-in (WebAuthn)** only accepts a credential registered to the account signing in. Challenges are single-use, expire after 2 minutes and are tied to one attempt.
+- **Sessions** use a Bearer token in the `Authorization` header (never the URL) and expire after `SESSION_HOURS`. The camera feed and live events use 60-second single-use tickets instead.
+- **CORS** allows only the dashboard origin(s) in `FRONTEND_ORIGIN`; `*` is refused at startup. API responses send `nosniff`, `DENY` framing, `no-referrer`, a restrictive CSP and `no-store`.
+- **Logs** never contain passwords, session tokens or stream tickets (a test checks this). Recognized people's names are printed to the backend console, so treat console logs as personal data.
+- **Behind a reverse proxy**, sign-in limits see the proxy's address unless it forwards the client IP. Configure uvicorn's `--proxy-headers` and `--forwarded-allow-ips` for your proxy.
+
 ## Running tests
 
 **Backend** (pytest, 165 tests): sign-in and session expiry, 401/403 on every protected endpoint, stream tickets, create/edit/delete for students, staff, classes and visitors, 409 conflicts and 422 length limits, the database schema and seed data, the migrations (a copy of the production structure migrated with 001-003 must equal `schema.sql`), ID-based event matching, and event storage (background writes that never block, outage recovery, per-role reads and pagination).

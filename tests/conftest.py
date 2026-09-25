@@ -129,8 +129,12 @@ def client(db):
     from backend.api import auth
     from backend.api.main import app
 
+    from backend.api import main
+
     auth._sessions.clear()
     auth._tickets.clear()
+    auth.login_limiter.reset()
+    main._challenges.clear()
     with TestClient(app) as c:
         yield c
 

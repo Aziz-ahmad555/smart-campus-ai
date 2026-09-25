@@ -124,3 +124,69 @@ def redeem_ticket(ticket, purpose):
     if not entry or entry["purpose"] != purpose or entry["expires_at"] < time.time():
         return None
     return entry["token"] if get_session(entry["token"]) else None
+
+
+# ---- Failed sign-in limits ----
+
+MAX_FAILED_LOGINS = int(os.getenv("LOGIN_MAX_ATTEMPTS", "5"))           # per account
+MAX_FAILED_LOGINS_PER_IP = MAX_FAILED_LOGINS * 4                        # per client address
+LOCKOUT_SECONDS = int(float(os.getenv("LOGIN_LOCKOUT_MINUTES", "15")) * 60)
+
+
+class LoginLimiter:
+    """After MAX_FAILED_LOGINS failed sign-ins for an account within the
+    lockout window, that account is locked for LOCKOUT_SECONDS (from the last
+    failure). A client address gets a higher limit, which slows password
+    spraying across many accounts. A successful sign-in clears the account's
+    count. In-memory, like sessions."""
+
+    def __init__(self):
+        self._failures = {}      # key -> [timestamps]
+        self._lock = threading.Lock()
+
+    def _recent(self, key, now):
+        times = [t for t in self._failures.get(key, []) if now - t < LOCKOUT_SECONDS]
+        if times:
+            self._failures[key] = times
+        else:
+            self._failures.pop(key, None)
+        return times
+
+    def retry_after(self, username, ip):
+        """Seconds until sign-in is allowed again, or 0."""
+        now = time.time()
+        with self._lock:
+            waits = []
+            for key, limit in ((("user", username.lower()), MAX_FAILED_LOGINS), (("ip", ip), MAX_FAILED_LOGINS_PER_IP)):
+                times = self._recent(key, now)
+                if len(times) >= limit:
+                    waits.append(int(times[-1] + LOCKOUT_SECONDS - now) + 1)
+            return max(waits, default=0)
+
+    def failed(self, username, ip):
+        now = time.time()
+        with self._lock:
+            for key in (("user", username.lower()), ("ip", ip)):
+                self._failures.setdefault(key, []).append(now)
+
+    def succeeded(self, username):
+        with self._lock:
+            self._failures.pop(("user", username.lower()), None)
+
+    def reset(self):
+        with self._lock:
+            self._failures.clear()
+
+
+login_limiter = LoginLimiter()
+
+
+def check_login_allowed(username, ip):
+    wait = login_limiter.retry_after(username, ip)
+    if wait:
+        minutes = max(1, round(wait / 60))
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed sign-in attempts. Try again in {minutes} minute{'s' if minutes != 1 else ''}.",
+            headers={"Retry-After": str(wait)},
+        )

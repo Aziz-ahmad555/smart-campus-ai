@@ -56,7 +56,7 @@ export default function LoginPage() {
     try {
       const begin = await api('/webauthn/login/begin', { method: 'POST', params: { username } })
       const credential = await startAuthentication({ optionsJSON: JSON.parse(begin.options) })
-      finish(await api('/webauthn/login/complete', { method: 'POST', body: { username, credential } }))
+      finish(await api('/webauthn/login/complete', { method: 'POST', body: { username, credential, challenge_id: begin.challenge_id } }))
     } catch (err) {
       setError(err.name === 'NotAllowedError' ? 'Fingerprint sign-in was cancelled.' : err.message)
     } finally {
