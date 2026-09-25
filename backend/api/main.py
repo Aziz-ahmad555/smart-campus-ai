@@ -10,7 +10,7 @@ import psycopg2.extras
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from webauthn import (
     generate_authentication_options,
     generate_registration_options,
@@ -59,7 +59,7 @@ class VisitorCreate(BaseModel):
     cnic_or_id: Optional[str] = None
     reason: Optional[str] = None
     host_name: Optional[str] = None
-    allowed_minutes: int = 60
+    allowed_minutes: int = Field(60, gt=0, le=1440)   # 1 minute to 24 hours
 
 
 @app.on_event("startup")

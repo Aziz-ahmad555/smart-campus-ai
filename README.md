@@ -187,6 +187,22 @@ The dashboard talks to `http://localhost:8000` by default. To use another backen
 
 Open http://localhost:5173 and sign in. Admins land on the live dashboard, teachers on their class, students on their own profile. Sessions last 8 hours (`SESSION_HOURS` in `.env`).
 
+## Running tests
+
+**Backend** (pytest, 96 tests): sign-in and session expiry, 401/403 on every protected endpoint, stream tickets, create/edit/delete for students, staff, classes and visitors, the database schema and seed data, and ID-based event matching.
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests
+```
+- No webcam, face model or real database is used. The camera/recognition engine is replaced by a fake, and each run creates a throwaway PostgreSQL cluster in a temp folder with `initdb`, loads `schema.sql` and deletes it afterwards. Your own database is never touched.
+- The PostgreSQL command-line tools must be installed. They're found on your PATH, in `C:\Program Files\PostgreSQL\*\bin`, or via the `PG_BIN` environment variable. To use an existing empty database instead, set `TEST_DB_HOST`, `TEST_DB_PORT`, `TEST_DB_NAME`, `TEST_DB_USER` and `TEST_DB_PASSWORD`.
+
+**Frontend** (Vitest + Testing Library): the login page, route protection by role and session expiry, a list page's error state, and the API client's auth header and 401 handling.
+```bash
+cd frontend
+npm test
+```
+
 ## Known Limitations
 
 - Partial occlusion remains challenging for landmark-based detectors (MTCNN, RetinaFace); severe occlusion covering multiple landmarks causes detection failure upstream of recognition
