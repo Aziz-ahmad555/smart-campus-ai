@@ -38,6 +38,7 @@ fake_engine.connected_websockets = []
 fake_engine.main_event_loop = None
 fake_engine.start_background_tracking = lambda: None
 fake_engine.get_latest_frame = lambda: b"\xff\xd8fake-jpeg\xff\xd9"
+fake_engine.wait_for_frame = lambda after_seq, timeout=1.0: (after_seq + 1, b"\xff\xd8fake-jpeg\xff\xd9")
 sys.modules["backend.tracking.engine"] = fake_engine
 
 

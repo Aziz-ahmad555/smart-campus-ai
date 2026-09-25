@@ -126,12 +126,12 @@ def stream_ticket(purpose: str, session=Depends(admin_only)):
 
 
 def mjpeg_generator(token):
+    seq = 0
     while auth.get_session(token):          # the stream ends when the session does
-        frame = engine.get_latest_frame()
+        seq, frame = engine.wait_for_frame(seq, timeout=1.0)   # each new frame once, as it arrives
         if frame is not None:
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-        time.sleep(0.05)
 
 
 @app.get("/video-feed")

@@ -173,7 +173,7 @@ After these, the database has exactly the structure `schema.sql` creates (a test
 **Deleting things that are still in use.** The database refuses to delete a class that still has students or a teacher, a student or staff member who has a login account, or a user with registered fingerprints. The dashboard then shows why, for example "This class still has 12 students assigned. Reassign them first." (HTTP 409). Text fields are limited to the database column lengths; longer input is rejected (HTTP 422).
 
 ### 4. Configuration
-Copy `.env.example` to `.env` in the project root and set your database password. `.env` is ignored by git. The same file sets the session length (`SESSION_HOURS`), the dashboard address used for CORS and fingerprint sign-in (`FRONTEND_ORIGIN`, `WEBAUTHN_RP_ID`) and the camera (`CAMERA_SOURCE`: a webcam index or an `rtsp://` URL; `CAMERA_NAME` labels its events); the defaults suit local development.
+Copy `.env.example` to `.env` in the project root and set your database password. `.env` is ignored by git. The same file sets the session length (`SESSION_HOURS`), the dashboard address used for CORS and fingerprint sign-in (`FRONTEND_ORIGIN`, `WEBAUTHN_RP_ID`) and the camera (`CAMERA_SOURCE`: a webcam index or an `rtsp://` URL; `CAMERA_NAME` labels its events; `DETECTION_IMAGE_SIZE`, `DETECTION_THREADS` and `RECOGNITION_THREADS` tune the CPU load); the defaults suit local development.
 
 ### 5. An admin account
 ```bash

@@ -34,11 +34,39 @@ MAX_RECHECKS = 5
 IDENTIFYING = "Identifying..."
 ERROR_LOG_INTERVAL = 60          # seconds between repeats of the same swallowed error
 
+# Live feed. The camera is read (and the stream updated) on its own thread at
+# the camera's frame rate; detection runs on another thread, always on the
+# newest frame, so a slow detection drops stale frames instead of delaying the
+# picture. Boxes are drawn from the latest detection.
+DETECTION_IMAGE_SIZE = int(os.getenv("DETECTION_IMAGE_SIZE", "416"))  # YOLO input size; boxes come back in frame pixels
+STREAM_JPEG_QUALITY = 70
+# CPU threads for person detection (PyTorch) and for face recognition
+# (TensorFlow, shared by the recognition workers). Left unlimited, TensorFlow
+# uses every core and detection slows down to about half speed.
+_cpus = os.cpu_count() or 4
+DETECTION_THREADS = int(os.getenv("DETECTION_THREADS", str(max(1, _cpus // 2))))
+RECOGNITION_THREADS = int(os.getenv("RECOGNITION_THREADS", str(max(1, _cpus // 4))))
+
 # Fall detection tuning
 FALL_RATIO_HISTORY_LEN = 10       # frames of aspect-ratio history kept per track
 FALL_RATIO_DROP_THRESHOLD = 0.9   # how much the height/width ratio must fall to flag a fall
 FALL_ALERT_COOLDOWN = 15          # seconds between repeated fall alerts for the same track
 
+def limit_cpu_threads():
+    try:
+        import torch
+        torch.set_num_threads(DETECTION_THREADS)
+    except Exception as e:
+        print(f"Could not limit PyTorch threads: {e}")
+    try:
+        import tensorflow as tf
+        tf.config.threading.set_intra_op_parallelism_threads(RECOGNITION_THREADS)
+        tf.config.threading.set_inter_op_parallelism_threads(1)
+    except Exception as e:           # only possible before TensorFlow's first operation
+        print(f"Could not limit TensorFlow threads: {e}")
+
+
+limit_cpu_threads()
 person_model = YOLO("yolov8n.pt")
 face_model = YOLO("backend/detection/models/yolov8n-face.pt")
 
@@ -52,9 +80,6 @@ main_event_loop = None
 
 last_crowd_alert_time = 0
 current_person_count = 0
-
-latest_frame = None
-frame_lock = threading.Lock()
 
 recognition_executor = ThreadPoolExecutor(max_workers=2)
 recognition_in_progress = set()
@@ -402,19 +427,81 @@ def end_tracks(current_ids, now):
     return gone
 
 
+latest_frame = None          # JPEG sent to the dashboard
+latest_frame_seq = 0
+stream_frame_ready = threading.Condition()
+
+camera_frame = None          # newest raw frame, for detection
+camera_frame_seq = 0
+camera_stopped = False
+camera_frame_ready = threading.Condition()
+
+overlays = []                # boxes and labels from the latest detection
+overlays_lock = threading.Lock()
+
+
 def update_latest_frame(frame):
-    global latest_frame
-    ok, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+    global latest_frame, latest_frame_seq
+    ok, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, STREAM_JPEG_QUALITY])
     if ok:
-        with frame_lock:
+        with stream_frame_ready:
             latest_frame = buffer.tobytes()
+            latest_frame_seq += 1
+            stream_frame_ready.notify_all()
 
 def get_latest_frame():
-    with frame_lock:
+    with stream_frame_ready:
         return latest_frame
 
+def wait_for_frame(after_seq, timeout=1.0):
+    """(seq, jpeg) of the first stream frame newer than after_seq, or
+    (after_seq, None) if none arrives within timeout."""
+    with stream_frame_ready:
+        stream_frame_ready.wait_for(lambda: latest_frame_seq != after_seq, timeout=timeout)
+        if latest_frame_seq == after_seq:
+            return after_seq, None
+        return latest_frame_seq, latest_frame
+
+def draw_overlays(frame, boxes):
+    for x1, y1, x2, y2, text, color in boxes:
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(frame, text, (x1, max(y1-10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+
+def run_capture_loop(cap):
+    """Reads the camera at its own rate: hands the newest frame to detection
+    and sends every frame to the stream with the latest boxes drawn on it."""
+    global camera_frame, camera_frame_seq, camera_stopped
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            with camera_frame_ready:
+                camera_frame = frame
+                camera_frame_seq += 1
+                camera_frame_ready.notify()
+            display = frame.copy()
+            with overlays_lock:
+                boxes = overlays
+            draw_overlays(display, boxes)
+            update_latest_frame(display)
+    finally:
+        cap.release()
+        with camera_frame_ready:
+            camera_stopped = True
+            camera_frame_ready.notify()
+
+def next_camera_frame(after_seq):
+    """The newest camera frame after after_seq (older ones are skipped), or
+    (after_seq, None) once the camera has stopped."""
+    with camera_frame_ready:
+        camera_frame_ready.wait_for(lambda: camera_frame_seq != after_seq or camera_stopped)
+        if camera_frame_seq == after_seq:
+            return after_seq, None
+        return camera_frame_seq, camera_frame
+
 def run_tracking_loop():
-    global current_person_count
+    global current_person_count, camera_stopped, overlays
     source = int(CAMERA_SOURCE) if CAMERA_SOURCE.isdigit() else CAMERA_SOURCE
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
@@ -422,18 +509,19 @@ def run_tracking_loop():
         return
 
     print("Background tracking loop started.")
+    with camera_frame_ready:
+        camera_stopped = False
+    threading.Thread(target=run_capture_loop, args=(cap,), daemon=True).start()
 
-    frame_counter = 0
-
+    seq = 0
     while True:
-        ret, frame = cap.read()
-        if not ret:
+        seq, frame = next_camera_frame(seq)
+        if frame is None:
             break
 
-        frame_counter += 1
-
-        results = person_model.track(frame, classes=[0], persist=True, verbose=False)
+        results = person_model.track(frame, classes=[0], persist=True, imgsz=DETECTION_IMAGE_SIZE, verbose=False)
         current_frame_ids = set()
+        boxes_to_draw = []
 
         if results[0].boxes.id is not None:
             boxes = results[0].boxes.xyxy.cpu().numpy()
@@ -445,7 +533,10 @@ def run_tracking_loop():
             for box, track_id in zip(boxes, track_ids):
                 x1, y1, x2, y2 = map(int, box)
                 current_frame_ids.add(track_id)
-                person_crop = frame[max(0,y1):y2, max(0,x1):x2].copy()
+                # A view, not a copy: the capture thread never changes this frame
+                # (it draws on its own copy), and only tracks still being
+                # identified keep it.
+                person_crop = frame[max(0,y1):y2, max(0,x1):x2]
                 info = observe_track(track_id, person_crop, time.time())
                 label_text = info["label"]
 
@@ -460,17 +551,13 @@ def run_tracking_loop():
                     box_color = (0, 0, 220)
                 else:
                     box_color = (0, 200, 0)
-                cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
-                cv2.putText(frame, f"ID {track_id}: {label_text}", (x1, max(y1-10, 15)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, box_color, 2)
+                boxes_to_draw.append((x1, y1, x2, y2, f"ID {track_id}: {label_text}", box_color))
         else:
             current_person_count = 0
 
+        with overlays_lock:
+            overlays = boxes_to_draw     # replaced, never changed in place: the capture thread may be drawing the old list
         end_tracks(current_frame_ids, time.time())
-
-        update_latest_frame(frame)
-
-    cap.release()
 
 def start_background_tracking():
     event_store.start()
