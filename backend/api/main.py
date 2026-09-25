@@ -85,12 +85,14 @@ class VisitorCreate(BaseModel):
 @app.on_event("startup")
 def startup_event():
     engine.main_event_loop = asyncio.get_event_loop()
+    event_store.start_retention()           # delete events older than EVENT_RETENTION_DAYS, then every 6 h
     engine.start_background_tracking()
 
 
 @app.on_event("shutdown")
 def shutdown_event():
     event_store.stop()          # write out any queued events before exiting
+    event_store.stop_retention()
 
 
 # Pagination for event history: newest first, `before` = the last id you got.

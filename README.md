@@ -210,9 +210,22 @@ Open http://localhost:5173 and sign in. Admins land on the live dashboard, teach
 - **Logs** never contain passwords, session tokens or stream tickets (a test checks this). Recognized people's names are printed to the backend console, so treat console logs as personal data.
 - **Behind a reverse proxy**, sign-in limits see the proxy's address unless it forwards the client IP. Configure uvicorn's `--proxy-headers` and `--forwarded-allow-ips` for your proxy.
 
+## Data retention
+
+Recognition events are attendance records linked to biometric (face) recognition, so they aren't kept forever.
+
+- Events older than `EVENT_RETENTION_DAYS` (in `.env`, default **90**) are deleted automatically when the backend starts and every 6 hours after that. The setting must be a whole number of 1 or more; the backend refuses to start with anything else.
+- If the backend isn't always running, run the same cleanup from a scheduler (cron / Windows Task Scheduler):
+  ```bash
+  python backend/database/purge_events.py            # uses EVENT_RETENTION_DAYS
+  python backend/database/purge_events.py --days 30  # one-off override
+  ```
+- Deleting a student or staff member keeps their past events, with the person link removed.
+- Reference face photos in `data/known_faces/` are not affected by this setting. Remove a person's folder when they no longer need to be recognized.
+
 ## Running tests
 
-**Backend** (pytest, 165 tests): sign-in and session expiry, 401/403 on every protected endpoint, stream tickets, create/edit/delete for students, staff, classes and visitors, 409 conflicts and 422 length limits, the database schema and seed data, the migrations (a copy of the production structure migrated with 001-003 must equal `schema.sql`), ID-based event matching, and event storage (background writes that never block, outage recovery, per-role reads and pagination).
+**Backend** (pytest, 217 tests): sign-in and session expiry, 401/403 on every protected endpoint, stream tickets, create/edit/delete for students, staff, classes and visitors, 409 conflicts and 422 length limits, the security fixes (fingerprint sign-in bound to its own account, lockout, no username discovery), admin account management, event retention, the database schema and seed data, the migrations (a copy of the production structure migrated with 001-003 must equal `schema.sql`), ID-based event matching, and event storage (background writes that never block, outage recovery, per-role reads and pagination).
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest tests
@@ -222,7 +235,7 @@ python -m pytest tests
 
 **Continuous integration:** `.github/workflows/ci.yml` runs on every push and pull request. It runs the backend tests against a PostgreSQL 18 service container (installing only `requirements-ci.txt`, since the tests fake the camera and face models), and the frontend lint, tests and build.
 
-**Frontend** (Vitest + Testing Library, 12 tests): the login page, route protection by role and session expiry, a list page's error state, the API client's auth header and 401 handling, loading older history, a refused delete's message, and form length limits.
+**Frontend** (Vitest + Testing Library, 14 tests): the login page, route protection by role and session expiry, a list page's error state, the API client's auth header and 401 handling, loading older history, a refused delete's message, form length limits, and the Accounts page.
 ```bash
 cd frontend
 npm test

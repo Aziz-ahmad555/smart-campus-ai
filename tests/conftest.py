@@ -123,11 +123,15 @@ def db(database):
 
 
 @pytest.fixture
-def client(db):
+def client(db, monkeypatch):
     from fastapi.testclient import TestClient
 
     from backend.api import auth
     from backend.api.main import app
+    from backend.tracking import event_store
+
+    # The scheduled retention cleanup runs in its own tests (test_retention.py).
+    monkeypatch.setattr(event_store, "start_retention", lambda *a, **k: None)
 
     from backend.api import main
 

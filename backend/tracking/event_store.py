@@ -197,3 +197,80 @@ def query_events(where="TRUE", params=(), limit=100, before=None):
         conn.close()
     page = [row_to_event(r) for r in rows[:limit]]
     return page, (page[-1]["id"] if len(rows) > limit else None)
+
+
+# ---- retention ----
+#
+# Events are attendance data linked to biometric recognition, so they are
+# kept only EVENT_RETENTION_DAYS (default 90). The API deletes older events
+# at startup and then every RETENTION_CHECK_HOURS; backend/database/purge_events.py
+# does the same on demand (e.g. from cron / Task Scheduler).
+
+RETENTION_CHECK_HOURS = 6
+PURGE_BATCH = 5_000
+
+
+def retention_days(value=None):
+    """EVENT_RETENTION_DAYS as a whole number of days (>= 1)."""
+    raw = os.getenv("EVENT_RETENTION_DAYS", "90") if value is None else value
+    try:
+        days = int(str(raw).strip())
+    except ValueError:
+        days = 0
+    if days < 1:
+        raise RuntimeError(f"EVENT_RETENTION_DAYS must be a whole number of days, 1 or more (got {raw!r}).")
+    return days
+
+
+def purge_old_events(days=None):
+    """Delete events older than `days` (default: the setting). Works in
+    batches so the table isn't locked for long. Returns how many were deleted."""
+    days = retention_days() if days is None else retention_days(days)
+    deleted = 0
+    conn = get_db_connection()
+    try:
+        while True:
+            with conn, conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM events WHERE id IN (SELECT id FROM events "
+                    "WHERE created_at < now() - make_interval(days => %s) LIMIT %s);",
+                    (days, PURGE_BATCH),
+                )
+                deleted += cur.rowcount
+                if cur.rowcount < PURGE_BATCH:
+                    break
+    finally:
+        conn.close()
+    return deleted
+
+
+_retention_thread = None
+_retention_stop = threading.Event()
+
+
+def _retention_loop(interval_seconds):
+    while not _retention_stop.is_set():
+        try:
+            n = purge_old_events()
+            if n:
+                print(f"[retention] deleted {n} events older than {retention_days()} days")
+        except Exception as e:             # database briefly unavailable: try again next time
+            print(f"[retention] cleanup failed: {type(e).__name__}")
+        _retention_stop.wait(interval_seconds)
+
+
+def start_retention(interval_seconds=None):
+    """Run the cleanup now and then every RETENTION_CHECK_HOURS (background thread)."""
+    global _retention_thread
+    retention_days()                        # fail fast on a bad setting
+    if _retention_thread and _retention_thread.is_alive():
+        return
+    _retention_stop.clear()
+    _retention_thread = threading.Thread(
+        target=_retention_loop, args=(interval_seconds or RETENTION_CHECK_HOURS * 3600,),
+        name="event-retention", daemon=True)
+    _retention_thread.start()
+
+
+def stop_retention():
+    _retention_stop.set()
