@@ -25,6 +25,14 @@ FACE_DETECTION_MIN_CONFIDENCE = 0.55
 MATCH_SIMILARITY_THRESHOLD = 0.62
 VOTE_SAMPLE_COUNT = 3
 VOTE_SAMPLE_INTERVAL = 0.35
+# A track that isn't identified by its first vote round is re-checked (same
+# strict rules) every RECHECK_INTERVAL_SECONDS, at most MAX_RECHECKS times.
+# Its ENTRY is written once: when identified, when the re-checks run out
+# (Unknown), or when the person leaves - whichever comes first.
+RECHECK_INTERVAL_SECONDS = 3.0
+MAX_RECHECKS = 5
+IDENTIFYING = "Identifying..."
+ERROR_LOG_INTERVAL = 60          # seconds between repeats of the same swallowed error
 
 # Fall detection tuning
 FALL_RATIO_HISTORY_LEN = 10       # frames of aspect-ratio history kept per track
@@ -35,6 +43,7 @@ person_model = YOLO("yolov8n.pt")
 face_model = YOLO("backend/detection/models/yolov8n-face.pt")
 
 known_track_ids = {}
+tracks_lock = threading.RLock()     # known_track_ids is changed by the camera loop and the recognition workers
 events_log = []
 events_lock = threading.Lock()
 
@@ -119,6 +128,23 @@ def build_reference_embeddings():
     print(f"Reference embeddings built: {len(reference_embeddings)} vectors across "
           f"{len(set(f for f, _ in reference_embeddings))} identities.")
 
+_last_error_log = {}
+
+
+def log_suppressed(where, error):
+    """Recognition keeps going after an error (the vote just counts as no
+    match), but the error is printed - at most once per ERROR_LOG_INTERVAL
+    per place, with how many were skipped - instead of disappearing."""
+    now = time.time()
+    last, skipped = _last_error_log.get(where, (0, 0))
+    if now - last >= ERROR_LOG_INTERVAL:
+        extra = f" ({skipped} more since the last report)" if skipped else ""
+        print(f"[recognition] {where} failed: {type(error).__name__}: {error}{extra}")
+        _last_error_log[where] = (now, 0)
+    else:
+        _last_error_log[where] = (last, skipped + 1)
+
+
 def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
@@ -139,7 +165,8 @@ def get_tight_face_crop(person_crop):
         if face_crop.size == 0 or face_crop.shape[0] < 40 or face_crop.shape[1] < 40:
             return None
         return face_crop
-    except Exception:
+    except Exception as e:
+        log_suppressed("face detection", e)
         return None
 
 def match_single_frame(face_crop):
@@ -168,7 +195,8 @@ def match_single_frame(face_crop):
         if best_score >= MATCH_SIMILARITY_THRESHOLD:
             return best_identity, best_score
         return None, best_score
-    except Exception:
+    except Exception as e:
+        log_suppressed("face embedding", e)
         return None, 0
 
 def broadcast_event(event):
@@ -183,6 +211,13 @@ async def safe_send(ws, event):
     except Exception:
         if ws in connected_websockets:
             connected_websockets.remove(ws)
+
+def announce_identifying(track_id):
+    """Live-only notice for the dashboard while a new track is being
+    identified. Not stored and not in the event log; the ENTRY replaces it."""
+    broadcast_event({"type": "IDENTIFYING", "track_id": int(track_id), "label": IDENTIFYING,
+                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")})
+
 
 def add_event(event_type, track_id, label, person=None, confidence=None):
     """person: {"person_type", "person_id"} of the recognized student/staff
@@ -243,46 +278,129 @@ def check_fall(track_id, box_width, box_height, label, person=None):
             add_event("FALL_DETECTED", track_id, label + " — possible fall detected", person)
             print(f"[FALL ALERT] Track ID {track_id}: {label} at {time.strftime('%H:%M:%S')} (ratio drop={drop:.2f})")
 
+def vote_once(track_id):
+    """One vote round: VOTE_SAMPLE_COUNT samples of the track's latest crop.
+    Returns (person_or_None, label, confidence, votes, scores). Identified only
+    if at least 2 samples agree on the same identity at >= the threshold."""
+    votes, scores = [], []
+    for _ in range(VOTE_SAMPLE_COUNT):
+        with pending_samples_lock:
+            crop = pending_samples.get(track_id)
+        if crop is not None:
+            face_crop = get_tight_face_crop(crop)
+            if face_crop is not None:
+                identity, score = match_single_frame(face_crop)
+                votes.append(identity)
+                scores.append(score)
+        time.sleep(VOTE_SAMPLE_INTERVAL)
+
+    counts = Counter(votes)
+    if counts:
+        winner, count = counts.most_common(1)[0]
+        if winner is not None and count >= 2:
+            person = lookup_person(winner)
+            label = person["label"] if person else winner
+            confidence = max(s for v, s in zip(votes, scores) if v == winner)
+            return person, label, confidence, votes, scores
+    return None, None, None, votes, scores
+
+
+def log_entry(track_id, info):
+    """Write the track's single ENTRY (caller holds tracks_lock)."""
+    if info["entry_logged"]:
+        return
+    info["entry_logged"] = True
+    add_event("ENTRY", track_id, info["label"], info["person"], info["confidence"])
+
+
 def run_voting_recognition(track_id):
     try:
-        votes = []
-        scores = []
-        for _ in range(VOTE_SAMPLE_COUNT):
-            with pending_samples_lock:
-                crop = pending_samples.get(track_id)
-            if crop is not None:
-                face_crop = get_tight_face_crop(crop)
-                if face_crop is not None:
-                    identity, score = match_single_frame(face_crop)
-                    votes.append(identity)
-                    scores.append(score)
-            time.sleep(VOTE_SAMPLE_INTERVAL)
-
-        vote_counts = Counter(votes)
-        person = None
-        confidence = None
-        if vote_counts:
-            winner, count = vote_counts.most_common(1)[0]
-            if winner is not None and count >= 2:
-                person = lookup_person(winner)
-                label = person["label"] if person else winner
-                confidence = max(s for v, s in zip(votes, scores) if v == winner)
+        person, label, confidence, votes, scores = vote_once(track_id)
+        with tracks_lock:
+            info = known_track_ids.get(track_id)
+            if info is None or info["status"] == "done":
+                return                                   # person left meanwhile: ENTRY already written
+            info["attempts"] += 1
+            if label is not None:
+                info.update(label=label, person=person, confidence=confidence, status="done")
+                log_entry(track_id, info)
+                outcome = label
+            elif info["attempts"] > MAX_RECHECKS:
+                info.update(label="Unknown", status="done")
+                log_entry(track_id, info)
+                outcome = "Unknown"
             else:
-                label = "Unknown"
-        else:
-            label = "Unknown"
-
-        if track_id in known_track_ids:
-            known_track_ids[track_id]["label"] = label
-            known_track_ids[track_id]["person"] = person
-            known_track_ids[track_id]["status"] = "done"
-            add_event("ENTRY", track_id, label, person, confidence)
-            print(f"[ENTRY] Track ID {track_id}: {label} (votes={votes}, scores={[round(s,3) for s in scores]})")
+                info["status"] = "identifying"
+                info["next_check"] = time.time() + RECHECK_INTERVAL_SECONDS
+                outcome = f"not yet (re-check {info['attempts']}/{MAX_RECHECKS} in {RECHECK_INTERVAL_SECONDS:.0f}s)"
+            done = info["status"] == "done"
+        tag = "[ENTRY]" if done else "[RECHECK]"
+        print(f"{tag} Track ID {track_id}: {outcome} (votes={votes}, scores={[round(float(s), 3) for s in scores]})")
     finally:
         with recognition_results_lock:
             recognition_in_progress.discard(track_id)
+        with tracks_lock:
+            finished = track_id not in known_track_ids or known_track_ids[track_id]["status"] == "done"
+        if finished:
+            with pending_samples_lock:
+                pending_samples.pop(track_id, None)
+
+
+def submit_recognition(track_id):
+    with recognition_results_lock:
+        if track_id in recognition_in_progress:
+            return
+        recognition_in_progress.add(track_id)
+    recognition_executor.submit(run_voting_recognition, track_id)
+
+
+def observe_track(track_id, person_crop, now):
+    """Called for every tracked person in every frame. Starts tracking new
+    people, keeps their newest crop for recognition while they're still being
+    identified, and schedules the first vote and any re-checks. Returns the
+    track's state."""
+    submit = False
+    with tracks_lock:
+        info = known_track_ids.get(track_id)
+        if info is None:
+            info = known_track_ids[track_id] = {
+                "label": IDENTIFYING, "person": None, "confidence": None,
+                "entry_time": now, "last_seen": now,
+                "status": "identifying", "attempts": 0, "next_check": now, "entry_logged": False,
+            }
+            announce_identifying(track_id)
+        info["last_seen"] = now
+        if info["status"] != "done":
+            with pending_samples_lock:
+                pending_samples[track_id] = person_crop
+            if info["status"] == "identifying" and now >= info["next_check"]:
+                info["status"] = "checking"
+                submit = True
+    if submit:
+        submit_recognition(track_id)
+    return info
+
+
+def end_tracks(current_ids, now):
+    """People not seen for EXIT_TIMEOUT_SECONDS have left: write their ENTRY
+    if it wasn't written yet (Unknown if never identified), then the EXIT."""
+    with tracks_lock:
+        gone = [tid for tid, info in known_track_ids.items()
+                if tid not in current_ids and now - info["last_seen"] > EXIT_TIMEOUT_SECONDS]
+        for track_id in gone:
+            info = known_track_ids.pop(track_id)
+            if info["label"] == IDENTIFYING:
+                info["label"] = "Unknown"
+            log_entry(track_id, info)
+            add_event("EXIT", track_id, info["label"], info["person"])
+            print(f"[EXIT] Track ID {track_id}: {info['label']}")
+    for track_id in gone:
         with pending_samples_lock:
             pending_samples.pop(track_id, None)
+        ratio_history.pop(track_id, None)
+        last_fall_alert.pop(track_id, None)
+    return gone
+
 
 def update_latest_frame(frame):
     global latest_frame
@@ -328,34 +446,15 @@ def run_tracking_loop():
                 x1, y1, x2, y2 = map(int, box)
                 current_frame_ids.add(track_id)
                 person_crop = frame[max(0,y1):y2, max(0,x1):x2].copy()
-
-                if track_id not in known_track_ids:
-                    known_track_ids[track_id] = {
-                        "label": "Identifying...",
-                        "entry_time": time.time(),
-                        "last_seen": time.time(),
-                        "status": "pending"
-                    }
-                    with pending_samples_lock:
-                        pending_samples[track_id] = person_crop
-                    with recognition_results_lock:
-                        if track_id not in recognition_in_progress:
-                            recognition_in_progress.add(track_id)
-                            recognition_executor.submit(run_voting_recognition, track_id)
-                else:
-                    known_track_ids[track_id]["last_seen"] = time.time()
-                    with pending_samples_lock:
-                        if track_id in pending_samples:
-                            pending_samples[track_id] = person_crop
-
-                label_text = known_track_ids[track_id]["label"]
+                info = observe_track(track_id, person_crop, time.time())
+                label_text = info["label"]
 
                 # Fall detection runs every frame using the cheap bounding-box heuristic
                 box_w = x2 - x1
                 box_h = y2 - y1
-                check_fall(track_id, box_w, box_h, label_text, known_track_ids[track_id].get("person"))
+                check_fall(track_id, box_w, box_h, label_text, info.get("person"))
 
-                if label_text == "Identifying...":
+                if label_text == IDENTIFYING:
                     box_color = (0, 165, 255)
                 elif label_text == "Unknown":
                     box_color = (0, 0, 220)
@@ -367,20 +466,7 @@ def run_tracking_loop():
         else:
             current_person_count = 0
 
-        now = time.time()
-        exited_ids = []
-        for track_id, info in known_track_ids.items():
-            if track_id not in current_frame_ids and (now - info["last_seen"]) > EXIT_TIMEOUT_SECONDS:
-                exited_ids.append(track_id)
-
-        for track_id in exited_ids:
-            label = known_track_ids[track_id]["label"]
-            if label != "Identifying...":
-                add_event("EXIT", track_id, label, known_track_ids[track_id].get("person"))
-                print(f"[EXIT] Track ID {track_id}: {label}")
-            del known_track_ids[track_id]
-            ratio_history.pop(track_id, None)
-            last_fall_alert.pop(track_id, None)
+        end_tracks(current_frame_ids, time.time())
 
         update_latest_frame(frame)
 

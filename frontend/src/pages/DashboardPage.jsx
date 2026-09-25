@@ -17,7 +17,7 @@ const CONNECTION = {
 }
 
 export default function DashboardPage() {
-  const { events, status, error, loadOlder, hasOlder, loadingOlder } = useLiveEvents()
+  const { events, identifying, status, error, loadOlder, hasOlder, loadingOlder } = useLiveEvents()
 
   const stats = useMemo(() => {
     const inside = new Set()
@@ -26,13 +26,14 @@ export default function DashboardPage() {
       if (e.type === 'EXIT') inside.delete(e.track_id)
     }
     const known = new Set(events.filter((e) => e.type === 'ENTRY' && e.label !== 'Unknown').map((e) => e.label))
+    for (const e of identifying) inside.add(e.track_id)          // seen, ENTRY not written yet
     return {
       occupancy: inside.size,
       entries: events.filter((e) => e.type === 'ENTRY').length,
       identities: known.size,
       alerts: events.filter(isAlert).length,
     }
-  }, [events])
+  }, [events, identifying])
 
   // A failed initial load means the backend is down, even while the socket is still trying.
   const conn = error && status !== 'live' ? { tone: 'danger', label: 'Offline' } : CONNECTION[status]
@@ -67,6 +68,7 @@ export default function DashboardPage() {
 
       <EventsTable
         events={events}
+        identifying={identifying}
         loading={status === 'connecting' && events.length === 0}
         onLoadOlder={loadOlder}
         hasOlder={hasOlder}

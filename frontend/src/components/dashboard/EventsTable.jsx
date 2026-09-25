@@ -22,7 +22,7 @@ const FILTERS = {
   alerts: isAlert,
 }
 
-export default function EventsTable({ events, loading, onLoadOlder, hasOlder = false, loadingOlder = false }) {
+export default function EventsTable({ events, identifying = [], loading, onLoadOlder, hasOlder = false, loadingOlder = false }) {
   const [filter, setFilter] = useState('all')
   const [query, setQuery] = useState('')
   const [now, setNow] = useState(new Date())
@@ -38,6 +38,8 @@ export default function EventsTable({ events, loading, onLoadOlder, hasOlder = f
   )
   const q = query.trim().toLowerCase()
   const shown = events.filter(FILTERS[filter]).filter((e) => !q || (e.label || '').toLowerCase().includes(q))
+  // Being identified: shown above the log until their ENTRY arrives.
+  const pending = !q && (filter === 'all' || filter === 'ENTRY') ? identifying : []
 
   return (
     <Card>
@@ -69,7 +71,7 @@ export default function EventsTable({ events, loading, onLoadOlder, hasOlder = f
             { label: 'Time', className: 'text-right' },
           ]}
         >
-          {!loading && shown.length === 0 && (
+          {!loading && shown.length === 0 && pending.length === 0 && (
             <EmptyRow colSpan={4}>
               <EmptyState
                 icon={Radio}
@@ -78,6 +80,19 @@ export default function EventsTable({ events, loading, onLoadOlder, hasOlder = f
               />
             </EmptyRow>
           )}
+          {pending.map((e) => (
+            <Row key={`identifying-${e.track_id}`}>
+              <Cell><EventBadge type="IDENTIFYING" /></Cell>
+              <Cell className="italic text-slate-500 dark:text-slate-400">Identifying…</Cell>
+              <Cell className="hidden font-mono text-xs text-slate-500 sm:table-cell dark:text-slate-400">#{e.track_id}</Cell>
+              <Cell className="text-right">
+                <time dateTime={e.timestamp} title={e.timestamp} className="text-xs tabular-nums text-slate-500 dark:text-slate-400">
+                  <span className="text-slate-700 dark:text-slate-300">{formatTime(e.timestamp)}</span>
+                  <span className="ml-2 hidden md:inline">in view</span>
+                </time>
+              </Cell>
+            </Row>
+          ))}
           {shown.map((e, i) => (
             <Row key={e.id ?? `live-${e.timestamp}-${e.type}-${e.track_id}-${i}`}>
               <Cell><EventBadge type={e.type} /></Cell>

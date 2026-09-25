@@ -228,3 +228,31 @@ describe('UsersPage', () => {
     expect(await screen.findByText(refusal)).toBeInTheDocument()
   })
 })
+
+describe('Identifying… on the dashboard', () => {
+  it('tracks people until their ENTRY or EXIT, and drops stale notices', async () => {
+    const { trackIdentifying, IDENTIFYING_TTL_MS } = await import('../lib/events')
+    let state = trackIdentifying({}, { type: 'IDENTIFYING', track_id: 7, timestamp: 't' }, 1000)
+    state = trackIdentifying(state, { type: 'IDENTIFYING', track_id: 8, timestamp: 't' }, 1000)
+    expect(Object.keys(state)).toEqual(['7', '8'])
+    state = trackIdentifying(state, { type: 'ENTRY', track_id: 7, label: 'Aziz Ahmad (CS-001)' }, 2000)
+    expect(Object.keys(state)).toEqual(['8'])
+    state = trackIdentifying(state, { type: 'CROWD_ALERT', track_id: null }, 3000)
+    expect(Object.keys(state)).toEqual(['8'])
+    expect(trackIdentifying(state, null, 1000 + IDENTIFYING_TTL_MS)).toEqual({})
+  })
+
+  it('shows them above the event log', async () => {
+    const { default: EventsTable } = await import('../components/dashboard/EventsTable.jsx')
+    render(
+      <EventsTable
+        events={[{ id: 1, type: 'ENTRY', track_id: 3, label: 'Unknown', timestamp: '2026-09-25 10:00:00' }]}
+        identifying={[{ type: 'IDENTIFYING', track_id: 9, timestamp: '2026-09-25 10:00:05' }]}
+      />,
+    )
+    const rows = screen.getAllByRole('row')
+    expect(rows[1]).toHaveTextContent('Identifying…')
+    expect(rows[1]).toHaveTextContent('#9')
+    expect(rows[2]).toHaveTextContent('Unknown person')
+  })
+})

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, streamUrl } from './api'
+import { IDENTIFYING_TTL_MS, trackIdentifying } from './events'
 
 // Recognition events: the newest page of history from the database, then
 // live pushes over the WebSocket (reconnecting with backoff and a fresh
-// stream ticket). loadOlder() pages further back. Newest first.
+// stream ticket). loadOlder() pages further back. Newest first. `identifying`
+// holds the people currently being identified (live only, not stored).
 const PAGE_SIZE = 100
 
 // Append stored events, skipping any already shown (the same page can be
@@ -15,6 +17,7 @@ function mergeHistory(current, incoming) {
 
 export function useLiveEvents() {
   const [events, setEvents] = useState([])
+  const [identifying, setIdentifying] = useState({})
   const [status, setStatus] = useState('connecting') // connecting | live | offline
   const [error, setError] = useState(null)
   const [nextBefore, setNextBefore] = useState(null)
@@ -72,7 +75,8 @@ export function useLiveEvents() {
       ws.onmessage = (message) => {
         try {
           const event = JSON.parse(message.data)
-          setEvents((prev) => [event, ...prev])
+          setIdentifying((prev) => trackIdentifying(prev, event))
+          if (event.type !== 'IDENTIFYING') setEvents((prev) => [event, ...prev])
         } catch {
           // ignore malformed messages
         }
@@ -80,13 +84,15 @@ export function useLiveEvents() {
       ws.onclose = scheduleRetry
     }
     connect()
+    const prune = setInterval(() => setIdentifying((prev) => trackIdentifying(prev, null)), IDENTIFYING_TTL_MS / 4)
 
     return () => {
       closed = true
       clearTimeout(retry)
+      clearInterval(prune)
       ws?.close()
     }
   }, [])
 
-  return { events, status, error, loadOlder, hasOlder: Boolean(nextBefore), loadingOlder }
+  return { events, identifying: Object.values(identifying), status, error, loadOlder, hasOlder: Boolean(nextBefore), loadingOlder }
 }
