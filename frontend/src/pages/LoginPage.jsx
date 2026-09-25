@@ -1,13 +1,13 @@
 import { useState } from 'react'
-import { Link, Navigate, useNavigate } from 'react-router-dom'
-import { Fingerprint, Eye, EyeOff, ScanFace, ShieldCheck, Radio, ArrowLeft } from 'lucide-react'
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
+import { Fingerprint, Eye, EyeOff, ScanFace, ShieldCheck, Radio, ArrowLeft, Clock } from 'lucide-react'
 import { startAuthentication } from '@simplewebauthn/browser'
 import { Button } from '../components/ui/Button'
 import { Input } from '../components/ui/Field'
 import { Logo } from '../components/ui/Misc'
 import { ErrorBanner } from '../components/ui/States'
 import { api } from '../lib/api'
-import { getToken, getUser, homePathFor, saveSession } from '../lib/session'
+import { getUser, hasSession, homePathFor, saveSession } from '../lib/session'
 
 const HIGHLIGHTS = [
   { icon: ScanFace, title: 'Face recognition', text: 'Known students and staff identified on entry.' },
@@ -17,6 +17,8 @@ const HIGHLIGHTS = [
 
 export default function LoginPage() {
   const navigate = useNavigate()
+  const [params] = useSearchParams()
+  const expired = params.get('expired') === '1'
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -24,7 +26,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(null) // null | 'password' | 'fingerprint'
 
   const existing = getUser()
-  if (getToken() && existing) return <Navigate to={homePathFor(existing.role)} replace />
+  if (hasSession() && existing) return <Navigate to={homePathFor(existing.role)} replace />
 
   const finish = (data) => {
     saveSession(data)
@@ -103,6 +105,12 @@ export default function LoginPage() {
           <p className="mt-1.5 text-sm text-slate-500 dark:text-slate-400">Use your campus account to continue.</p>
 
           <form onSubmit={signIn} className="mt-8 space-y-4">
+            {expired && !error && (
+              <div role="status" className="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                <Clock size={18} className="shrink-0" aria-hidden="true" />
+                Your session has expired. Please sign in again.
+              </div>
+            )}
             <ErrorBanner message={error} />
             <Input
               label="Username"

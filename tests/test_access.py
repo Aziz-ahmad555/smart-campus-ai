@@ -6,7 +6,7 @@ from tests.conftest import fake_engine
 
 
 def as_user(token):
-    return {"params": {"token": token}}
+    return {"headers": {"Authorization": f"Bearer {token}"}}
 
 
 ADMIN_ONLY = [
@@ -23,7 +23,7 @@ ANY_SIGNED_IN = [("GET", "/me"), ("GET", "/secure/my-events"), ("POST", "/logout
 @pytest.mark.parametrize("method,path", ADMIN_ONLY + TEACHER_ONLY + ANY_SIGNED_IN)
 def test_no_session_is_401(client, method, path):
     assert client.request(method, path).status_code == 401
-    assert client.request(method, path, params={"token": "not-a-real-token"}).status_code == 401
+    assert client.request(method, path, **as_user("not-a-real-token")).status_code == 401
 
 
 @pytest.mark.parametrize("role", ["teacher", "student"])
@@ -53,7 +53,7 @@ def test_public_endpoints_stay_public(client):
 # ---- camera feed and WebSocket: single-use tickets ----
 
 def ticket(client, token, purpose):
-    r = client.post("/stream-ticket", params={"purpose": purpose, "token": token})
+    r = client.post("/stream-ticket", params={"purpose": purpose}, **as_user(token))
     assert r.status_code == 200, r.text
     return r.json()["ticket"]
 
@@ -98,7 +98,7 @@ def test_expired_ticket_is_refused(client, login, monkeypatch):
 
 
 def test_unknown_stream_purpose_is_400(client, login):
-    r = client.post("/stream-ticket", params={"purpose": "microphone", "token": login("admin")})
+    r = client.post("/stream-ticket", params={"purpose": "microphone"}, **as_user(login("admin")))
     assert r.status_code == 400
 
 
@@ -122,3 +122,47 @@ def test_logout_invalidates_the_session(client, login):
     assert client.get("/students", **as_user(token)).status_code == 200
     assert client.post("/logout", **as_user(token)).status_code == 200
     assert client.get("/students", **as_user(token)).status_code == 401
+
+
+# ---- token handling ----
+
+def test_token_in_the_url_is_not_accepted(client, login):
+    token = login("admin")
+    assert client.get("/students", params={"token": token}).status_code == 401
+    assert client.get("/students", **as_user(token)).status_code == 200
+
+
+def test_wrong_auth_scheme_is_401(client, login):
+    token = login("admin")
+    assert client.get("/students", headers={"Authorization": f"Basic {token}"}).status_code == 401
+
+
+def test_login_returns_an_expiry_about_eight_hours_ahead(client, db):
+    import time
+
+    from tests.conftest import make_user
+
+    make_user(db, "admin1", "admin")
+    r = client.post("/login", json={"username": "admin1", "password": "correct-horse"})
+    assert r.status_code == 200
+    assert abs(r.json()["expires_at"] - (time.time() + 8 * 3600)) < 60
+    assert "password_hash" not in r.text
+
+
+def test_expired_session_is_401_and_removed(client, login, monkeypatch):
+    from backend.api import auth
+
+    token = login("admin")
+    real_time = auth.time.time
+    monkeypatch.setattr(auth.time, "time", lambda: real_time() + auth.SESSION_TTL_SECONDS + 1)
+    assert client.get("/students", **as_user(token)).status_code == 401
+    monkeypatch.setattr(auth.time, "time", real_time)
+    assert client.get("/students", **as_user(token)).status_code == 401      # stays expired
+
+
+def test_wrong_password_is_401(client, db):
+    from tests.conftest import make_user
+
+    make_user(db, "admin1", "admin")
+    assert client.post("/login", json={"username": "admin1", "password": "nope"}).status_code == 401
+    assert client.post("/login", json={"username": "ghost", "password": "nope"}).status_code == 401

@@ -413,12 +413,13 @@ def login(credentials: LoginRequest):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     token = auth.create_session(user)
-    return {"token": token, "user": auth.public_user(auth.get_session(token))}
+    session = auth.get_session(token)
+    return {"token": token, "expires_at": auth.session_expiry(session), "user": auth.public_user(session)}
 
 
 @app.get("/me")
 def get_current_user(session=Depends(current_session)):
-    return {"user": auth.public_user(session)}
+    return {"user": auth.public_user(session), "expires_at": auth.session_expiry(session)}
 
 
 @app.post("/logout")
@@ -628,4 +629,5 @@ def webauthn_login_complete(body: LoginCompleteRequest):
 
     token = auth.create_session(user)
     webauthn_challenges.pop(login_challenge_key, None)
-    return {"token": token, "user": auth.public_user(auth.get_session(token))}
+    session = auth.get_session(token)
+    return {"token": token, "expires_at": auth.session_expiry(session), "user": auth.public_user(session)}

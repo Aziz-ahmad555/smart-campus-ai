@@ -1,10 +1,10 @@
 import { Link } from 'react-router-dom'
 import { Compass } from 'lucide-react'
-import { getToken, getUser, homePathFor } from '../lib/session'
+import { getUser, hasSession, homePathFor } from '../lib/session'
 
 export default function NotFoundPage() {
   const user = getUser()
-  const home = getToken() && user ? homePathFor(user.role) : '/'
+  const home = hasSession() && user ? homePathFor(user.role) : '/'
   return (
     <div className="flex min-h-screen flex-col items-center justify-center px-6 text-center">
       <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400">
