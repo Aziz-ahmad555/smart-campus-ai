@@ -115,7 +115,7 @@ def db(database):
     conn = get_db_connection()
     conn.autocommit = True
     conn.cursor().execute(
-        "TRUNCATE webauthn_credentials, users, visitors, students, staff, classes RESTART IDENTITY CASCADE;"
+        "TRUNCATE events, webauthn_credentials, users, visitors, students, staff, classes RESTART IDENTITY CASCADE;"
     )
     fake_engine.events_log.clear()
     yield conn
@@ -160,3 +160,25 @@ def login(client, db):
         assert r.status_code == 200, r.text
         return r.json()["token"]
     return _login
+
+
+def insert_event(db, type_, label, student_id=None, staff_id=None, created_at="2026-09-25 10:00:00", track_id=1):
+    """Put one event straight into the events table (as the writer would)."""
+    cur = db.cursor()
+    cur.execute(
+        "INSERT INTO events (event_type, student_id, staff_id, label, track_id, created_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id;",
+        (type_, student_id, staff_id, label, track_id, created_at),
+    )
+    return cur.fetchone()[0]
+
+
+@pytest.fixture
+def event_writer(database):
+    """The real background event writer, started for one test."""
+    from backend.tracking import event_store
+
+    event_store.start()
+    yield event_store
+    assert event_store.flush(10), "events still unwritten at the end of the test"
+    event_store.stop()

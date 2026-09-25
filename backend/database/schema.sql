@@ -59,3 +59,23 @@ CREATE TABLE IF NOT EXISTS webauthn_credentials (
     public_key    BYTEA NOT NULL,
     sign_count    INTEGER NOT NULL DEFAULT 0
 );
+
+-- Recognition events (entries, exits, alerts, falls). Written in the
+-- background by the tracking engine; see migrations/002_events_table.sql.
+CREATE TABLE IF NOT EXISTS events (
+    id          BIGSERIAL PRIMARY KEY,
+    event_type  TEXT NOT NULL CHECK (event_type IN ('entry', 'exit', 'alert', 'fall')),
+    -- Who it was: a student OR a staff member, or neither (unknown person, crowd alert).
+    -- One foreign key can't point at two tables, hence two nullable columns.
+    student_id  INTEGER REFERENCES students(id) ON DELETE SET NULL,
+    staff_id    INTEGER REFERENCES staff(id) ON DELETE SET NULL,
+    label       TEXT NOT NULL,                   -- what was shown at the time, e.g. "Jane Doe (R-1)"
+    track_id    INTEGER,                         -- ByteTrack ID within the camera session
+    camera      TEXT NOT NULL DEFAULT 'main',
+    confidence  REAL,                            -- recognition similarity for entries, else NULL
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (student_id IS NULL OR staff_id IS NULL)
+);
+CREATE INDEX IF NOT EXISTS events_created_at_idx ON events (created_at);
+CREATE INDEX IF NOT EXISTS events_student_created_idx ON events (student_id, created_at) WHERE student_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS events_staff_created_idx ON events (staff_id, created_at) WHERE staff_id IS NOT NULL;

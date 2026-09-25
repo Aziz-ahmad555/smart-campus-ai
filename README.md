@@ -41,6 +41,7 @@ React Real-Time Dashboard
 - **Face recognition** — DeepFace embeddings (Facenet512) with face alignment, matched against a known-faces reference database
 - **Student identification** — recognized faces resolved to real student records via PostgreSQL
 - **Entry/exit tracking** — persistent IDs across frames using ByteTrack, with timestamped event logging
+- **Event history in PostgreSQL** — every entry, exit, crowd alert and possible fall is stored (who, when, camera, recognition confidence) by a background writer, so the camera loop never waits for the database; the dashboard and the teacher/student timelines page back through the full history
 - **Crowd detection** — threshold-based alerts when occupancy exceeds a configurable limit, with cooldown to prevent alert spam
 - **Fall detection** — flags a possible fall when a tracked person's bounding box changes sharply from tall to wide (heuristic, not a trained model)
 - **Role-based access** — admin, teacher and student accounts, bcrypt-hashed passwords, and admin-only write endpoints
@@ -154,13 +155,16 @@ psql -U postgres -d smart_campus_db -f backend/database/schema.sql
 psql -U postgres -d smart_campus_db -f backend/database/seed.sql     # optional
 ```
 
-**Upgrading an existing database?** Accounts are now linked to people by ID instead of by name. Run the migration once; it links every account whose full name matches exactly one student or staff member, then lists any accounts left to link by hand:
+**Upgrading an existing database?** Run the migrations once, in order. Both are safe to re-run.
+- `001` links accounts to people by ID instead of by name. It links every account whose full name matches exactly one student or staff member, then lists any accounts left to link by hand.
+- `002` creates the `events` table that stores the event history.
 ```bash
 psql -U postgres -d smart_campus_db -f backend/database/migrations/001_link_users_to_people.sql
+psql -U postgres -d smart_campus_db -f backend/database/migrations/002_events_table.sql
 ```
 
 ### 4. Configuration
-Copy `.env.example` to `.env` in the project root and set your database password. `.env` is ignored by git. The same file sets the session length (`SESSION_HOURS`), the dashboard address used for CORS and fingerprint sign-in (`FRONTEND_ORIGIN`, `WEBAUTHN_RP_ID`) and the camera (`CAMERA_SOURCE`: a webcam index or an `rtsp://` URL); the defaults suit local development.
+Copy `.env.example` to `.env` in the project root and set your database password. `.env` is ignored by git. The same file sets the session length (`SESSION_HOURS`), the dashboard address used for CORS and fingerprint sign-in (`FRONTEND_ORIGIN`, `WEBAUTHN_RP_ID`) and the camera (`CAMERA_SOURCE`: a webcam index or an `rtsp://` URL; `CAMERA_NAME` labels its events); the defaults suit local development.
 
 ### 5. An admin account
 ```bash
@@ -189,7 +193,7 @@ Open http://localhost:5173 and sign in. Admins land on the live dashboard, teach
 
 ## Running tests
 
-**Backend** (pytest, 96 tests): sign-in and session expiry, 401/403 on every protected endpoint, stream tickets, create/edit/delete for students, staff, classes and visitors, the database schema and seed data, and ID-based event matching.
+**Backend** (pytest, 112 tests): sign-in and session expiry, 401/403 on every protected endpoint, stream tickets, create/edit/delete for students, staff, classes and visitors, the database schema and seed data, ID-based event matching, and event storage (background writes that never block, outage recovery, per-role reads and pagination).
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest tests
@@ -197,7 +201,7 @@ python -m pytest tests
 - No webcam, face model or real database is used. The camera/recognition engine is replaced by a fake, and each run creates a throwaway PostgreSQL cluster in a temp folder with `initdb`, loads `schema.sql` and deletes it afterwards. Your own database is never touched.
 - The PostgreSQL command-line tools must be installed. They're found on your PATH, in `C:\Program Files\PostgreSQL\*\bin`, or via the `PG_BIN` environment variable. To use an existing empty database instead, set `TEST_DB_HOST`, `TEST_DB_PORT`, `TEST_DB_NAME`, `TEST_DB_USER` and `TEST_DB_PASSWORD`.
 
-**Frontend** (Vitest + Testing Library): the login page, route protection by role and session expiry, a list page's error state, and the API client's auth header and 401 handling.
+**Frontend** (Vitest + Testing Library, 10 tests): the login page, route protection by role and session expiry, a list page's error state, the API client's auth header and 401 handling, and loading older history.
 ```bash
 cd frontend
 npm test

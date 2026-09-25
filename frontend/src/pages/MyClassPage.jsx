@@ -8,16 +8,18 @@ import { EmptyState, ErrorBanner, SkeletonRows } from '../components/ui/States'
 import { Table, Row, Cell, EmptyRow } from '../components/ui/Table'
 import { formatTime, parseTime } from '../lib/format'
 import { getUser } from '../lib/session'
-import { useApi } from '../lib/useApi'
+import { useEventHistory } from '../lib/useEventHistory'
+import { LoadOlder } from '../components/ui/LoadOlder'
 
 export default function MyClassPage() {
   const user = getUser()
   // Roster and activity both come from the teacher's own session.
-  const roster = useApi('/secure/my-class-roster', { auth: true, interval: 15000, initial: { class_name: null, students: [], events: [], linked: true } })
-  const { class_name: className, students = [], events = [], linked = true } = roster.data
+  const roster = useEventHistory('/secure/my-class-roster', { interval: 15000 })
+  const { class_name: className = null, students = [], linked = true } = roster.data || {}
+  const events = roster.events                        // newest first, from the database
 
   const today = new Date().toDateString()
-  const recent = useMemo(() => events.slice().reverse(), [events])
+  const recent = events
   const seenToday = useMemo(
     () => new Set(events.filter((e) => e.type === 'ENTRY' && parseTime(e.timestamp)?.toDateString() === today).map((e) => e.label)).size,
     [events, today],
@@ -49,7 +51,7 @@ export default function MyClassPage() {
           <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
             <StatCard label="Students" value={students.length} icon={Users} tone="blue" loading={roster.loading} />
             <StatCard label="Seen on campus today" value={seenToday} hint="Recognized at least once" icon={LogIn} tone="emerald" loading={roster.loading} />
-            <StatCard label="Recent events" value={events.length} hint="Entries and exits for your class" icon={Clock} tone="violet" loading={roster.loading} />
+            <StatCard label="Recent events" value={events.length} hint="Loaded for your class" icon={Clock} tone="violet" loading={roster.loading} />
           </div>
 
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
@@ -97,6 +99,7 @@ export default function MyClassPage() {
                   ))}
                 </Table>
               </div>
+              <LoadOlder hasOlder={roster.hasOlder} loading={roster.loadingOlder} onClick={roster.loadOlder} />
             </Card>
           </div>
         </>

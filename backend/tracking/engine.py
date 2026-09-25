@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 from deepface import DeepFace
 from ultralytics import YOLO
 
+from backend.tracking import event_store
+
 load_dotenv()
 
 KNOWN_FACES_DB = "data/known_faces"
@@ -182,22 +184,26 @@ async def safe_send(ws, event):
         if ws in connected_websockets:
             connected_websockets.remove(ws)
 
-def add_event(event_type, track_id, label, person=None):
+def add_event(event_type, track_id, label, person=None, confidence=None):
     """person: {"person_type", "person_id"} of the recognized student/staff
     member, or None (unknown person, crowd alert). Views filter on these IDs,
-    never on the label text."""
+    never on the label text. The event goes to the live WebSocket and the
+    in-memory log right away, and to PostgreSQL via a background queue."""
     event = {
         "type": event_type,
         "track_id": int(track_id) if track_id is not None else None,
         "label": label,
         "person_type": person["person_type"] if person else None,
         "person_id": person["person_id"] if person else None,
+        "camera": event_store.CAMERA_NAME,
+        "confidence": round(float(confidence), 3) if confidence is not None else None,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
     }
     with events_lock:
         events_log.append(event)
         if len(events_log) > 100:
             events_log.pop(0)
+    event_store.enqueue(event)      # non-blocking; written to the database in the background
     broadcast_event(event)
 
 def check_crowd(person_count):
@@ -254,11 +260,13 @@ def run_voting_recognition(track_id):
 
         vote_counts = Counter(votes)
         person = None
+        confidence = None
         if vote_counts:
             winner, count = vote_counts.most_common(1)[0]
             if winner is not None and count >= 2:
                 person = lookup_person(winner)
                 label = person["label"] if person else winner
+                confidence = max(s for v, s in zip(votes, scores) if v == winner)
             else:
                 label = "Unknown"
         else:
@@ -268,7 +276,7 @@ def run_voting_recognition(track_id):
             known_track_ids[track_id]["label"] = label
             known_track_ids[track_id]["person"] = person
             known_track_ids[track_id]["status"] = "done"
-            add_event("ENTRY", track_id, label, person)
+            add_event("ENTRY", track_id, label, person, confidence)
             print(f"[ENTRY] Track ID {track_id}: {label} (votes={votes}, scores={[round(s,3) for s in scores]})")
     finally:
         with recognition_results_lock:
@@ -379,6 +387,7 @@ def run_tracking_loop():
     cap.release()
 
 def start_background_tracking():
+    event_store.start()
     build_reference_embeddings()
     thread = threading.Thread(target=run_tracking_loop, daemon=True)
     thread.start()

@@ -6,6 +6,7 @@ import { SearchInput } from '../ui/Field'
 import { Tabs } from '../ui/Misc'
 import { EmptyState } from '../ui/States'
 import { Table, Row, Cell, EmptyRow } from '../ui/Table'
+import { LoadOlder } from '../ui/LoadOlder'
 import { eventType, isAlert } from '../../lib/events'
 import { formatTime, timeAgo } from '../../lib/format'
 
@@ -21,7 +22,7 @@ const FILTERS = {
   alerts: isAlert,
 }
 
-export default function EventsTable({ events, loading }) {
+export default function EventsTable({ events, loading, onLoadOlder, hasOlder = false, loadingOlder = false }) {
   const [filter, setFilter] = useState('all')
   const [query, setQuery] = useState('')
   const [now, setNow] = useState(new Date())
@@ -78,7 +79,7 @@ export default function EventsTable({ events, loading }) {
             </EmptyRow>
           )}
           {shown.map((e, i) => (
-            <Row key={`${e.timestamp}-${e.type}-${e.track_id}-${i}`}>
+            <Row key={e.id ?? `live-${e.timestamp}-${e.type}-${e.track_id}-${i}`}>
               <Cell><EventBadge type={e.type} /></Cell>
               <Cell className={e.label === 'Unknown' ? 'italic text-slate-500 dark:text-slate-400' : 'font-medium text-slate-900 dark:text-white'}>
                 {e.label === 'Unknown' ? 'Unknown person' : e.label}
@@ -95,6 +96,7 @@ export default function EventsTable({ events, loading }) {
             </Row>
           ))}
         </Table>
+        <LoadOlder hasOlder={hasOlder} loading={loadingOlder} onClick={onLoadOlder} />
       </div>
     </Card>
   )

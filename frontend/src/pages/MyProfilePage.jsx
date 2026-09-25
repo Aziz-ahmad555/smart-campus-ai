@@ -8,14 +8,15 @@ import { EmptyState, ErrorBanner, Skeleton } from '../components/ui/States'
 import { eventType } from '../lib/events'
 import { formatDate, formatTime, parseTime, timeAgo } from '../lib/format'
 import { getUser } from '../lib/session'
-import { useApi } from '../lib/useApi'
+import { useEventHistory } from '../lib/useEventHistory'
+import { LoadOlder } from '../components/ui/LoadOlder'
 
 export default function MyProfilePage() {
   const user = getUser()
-  const activity = useApi('/secure/my-events', { auth: true, interval: 15000, initial: { events: [], linked: true } })
+  const activity = useEventHistory('/secure/my-events', { interval: 15000 })
 
-  const events = useMemo(() => activity.data.events.slice().reverse(), [activity.data])
-  const linked = activity.data.linked !== false
+  const events = activity.events                      // newest first, from the database
+  const linked = activity.data?.linked !== false
   const lastEntry = events.find((e) => e.type === 'ENTRY')
   const entries = events.filter((e) => e.type === 'ENTRY').length
   const exits = events.filter((e) => e.type === 'EXIT').length
@@ -60,8 +61,8 @@ export default function MyProfilePage() {
           tone="blue"
           loading={activity.loading}
         />
-        <StatCard label="Entries" value={entries} icon={LogIn} tone="emerald" loading={activity.loading} />
-        <StatCard label="Exits" value={exits} icon={LogOut} tone="slate" loading={activity.loading} />
+        <StatCard label="Entries" value={entries} hint="In the history shown below" icon={LogIn} tone="emerald" loading={activity.loading} />
+        <StatCard label="Exits" value={exits} hint="In the history shown below" icon={LogOut} tone="slate" loading={activity.loading} />
       </div>
 
       <Card>
@@ -96,6 +97,7 @@ export default function MyProfilePage() {
             </div>
           ))}
         </div>
+        <LoadOlder hasOlder={activity.hasOlder} loading={activity.loadingOlder} onClick={activity.loadOlder} />
       </Card>
     </AppShell>
   )

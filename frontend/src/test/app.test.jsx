@@ -122,3 +122,26 @@ describe('api()', () => {
     await waitFor(() => expect(assign).toHaveBeenCalledWith('/login?expired=1'))
   })
 })
+
+describe('MyProfilePage history', () => {
+  it('loads older events with the before cursor and appends them', async () => {
+    signIn('student')
+    const ev = (id, time) => ({ id, type: 'ENTRY', label: 'Test student', track_id: 1, timestamp: `2026-09-25 ${time}`, person_type: 'student', person_id: 1 })
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const before = new URL(String(url)).searchParams.get('before')
+      const body = before === '9'
+        ? { events: [ev(8, '08:00:00')], next_before: null, linked: true }
+        : { events: [ev(10, '10:00:00'), ev(9, '09:00:00')], next_before: 9, linked: true }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    const { default: MyProfilePage } = await import('../pages/MyProfilePage.jsx')
+    renderAt('/my-profile', <MyProfilePage />)
+
+    const button = await screen.findByRole('button', { name: 'Load older events' })
+    expect(screen.getAllByText('Entry')).toHaveLength(2)
+    button.click()
+    await waitFor(() => expect(screen.getAllByText('Entry')).toHaveLength(3))
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes('before=9'))).toBe(true)
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Load older events' })).not.toBeInTheDocument())
+  })
+})

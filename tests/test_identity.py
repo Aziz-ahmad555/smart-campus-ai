@@ -3,7 +3,7 @@ import importlib.util
 import sys
 import types
 
-from tests.conftest import ROOT, fake_engine, make_user
+from tests.conftest import ROOT, insert_event
 from tests.test_access import as_user
 
 MIGRATION = ROOT / "backend" / "database" / "migrations" / "001_link_users_to_people.sql"
@@ -20,18 +20,11 @@ def add_people(db):
     cur.execute("INSERT INTO staff (name, role, photo_folder, class_id) VALUES ('Teacher A', 'Teacher', 'TeacherA', 1);")
 
 
-def event(type_, label, person_type=None, person_id=None):
-    return {"type": type_, "track_id": 1, "label": label, "person_type": person_type,
-            "person_id": person_id, "timestamp": "2026-09-25 10:00:00"}
-
-
 def test_student_sees_only_their_own_events(client, db, login):
     add_people(db)
-    fake_engine.events_log.extend([
-        event("ENTRY", "Ali (R-1)", "student", 1),
-        event("ENTRY", "Ali Khan (R-2)", "student", 2),      # name contains "Ali": must NOT match
-        event("CROWD_ALERT", "3 people detected in frame"),
-    ])
+    insert_event(db, "entry", "Ali (R-1)", student_id=1)
+    insert_event(db, "entry", "Ali Khan (R-2)", student_id=2)          # name contains "Ali": must NOT match
+    insert_event(db, "alert", "3 people detected in frame")
     token = login("student", full_name="Ali", student_id=1)
     body = client.get("/secure/my-events", **as_user(token)).json()
     assert body["linked"] is True
@@ -40,11 +33,9 @@ def test_student_sees_only_their_own_events(client, db, login):
 
 def test_teacher_sees_only_their_class_events(client, db, login):
     add_people(db)
-    fake_engine.events_log.extend([
-        event("ENTRY", "Ali (R-1)", "student", 1),
-        event("EXIT", "Ali Khan (R-2)", "student", 2),        # other class
-        event("ENTRY", "Teacher A (Teacher)", "staff", 1),    # staff id 1 != student id 1
-    ])
+    insert_event(db, "entry", "Ali (R-1)", student_id=1)
+    insert_event(db, "exit", "Ali Khan (R-2)", student_id=2)           # other class
+    insert_event(db, "entry", "Teacher A (Teacher)", staff_id=1)       # staff id 1 != student id 1
     token = login("teacher", full_name="Teacher A", staff_id=1)
     body = client.get("/secure/my-class-roster", **as_user(token)).json()
     assert [s["name"] for s in body["students"]] == ["Ali"]
@@ -53,9 +44,9 @@ def test_teacher_sees_only_their_class_events(client, db, login):
 
 def test_unlinked_accounts_see_nothing(client, db, login):
     add_people(db)
-    fake_engine.events_log.append(event("ENTRY", "Ali (R-1)", "student", 1))
+    insert_event(db, "entry", "Ali (R-1)", student_id=1)
     token = login("student", full_name="Ali")                  # same name, but not linked
-    assert client.get("/secure/my-events", **as_user(token)).json() == {"events": [], "linked": False}
+    assert client.get("/secure/my-events", **as_user(token)).json() == {"events": [], "next_before": None, "linked": False}
     teacher = login("teacher", username="t2", full_name="Teacher A")
     body = client.get("/secure/my-class-roster", **as_user(teacher)).json()
     assert body["students"] == [] and body["linked"] is False
@@ -104,10 +95,16 @@ def test_engine_resolves_students_and_staff_to_ids(db, monkeypatch):
     assert engine.lookup_person("NotInTheDatabase") is None
 
 
-def test_engine_events_carry_the_person(db, monkeypatch):
+def test_engine_events_carry_the_person_and_reach_the_database(db, event_writer, monkeypatch):
+    add_people(db)
     engine = load_real_engine(monkeypatch)
-    engine.add_event("ENTRY", 7, "Ali (R-1)", {"person_type": "student", "person_id": 1, "label": "Ali (R-1)"})
+    engine.add_event("ENTRY", 7, "Ali (R-1)", {"person_type": "student", "person_id": 1, "label": "Ali (R-1)"}, 0.8123)
     engine.add_event("CROWD_ALERT", None, "3 people detected in frame")
     entry, crowd = engine.events_log
-    assert (entry["person_type"], entry["person_id"], entry["track_id"]) == ("student", 1, 7)
+    assert (entry["person_type"], entry["person_id"], entry["track_id"], entry["confidence"]) == ("student", 1, 7, 0.812)
     assert (crowd["person_type"], crowd["person_id"]) == (None, None)
+
+    assert event_writer.flush(10)
+    cur = db.cursor()
+    cur.execute("SELECT event_type, student_id, staff_id, track_id, round(confidence::numeric, 3)::float8 FROM events ORDER BY id;")
+    assert [tuple(r) for r in cur.fetchall()] == [("entry", 1, None, 7, 0.812), ("alert", None, None, None, None)]

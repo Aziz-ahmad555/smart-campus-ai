@@ -8,7 +8,7 @@ from typing import Optional
 import bcrypt
 import psycopg2
 import psycopg2.extras
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -28,7 +28,7 @@ from webauthn.helpers.structs import (
 from backend.api import auth
 from backend.api.auth import admin_only, current_session, teacher_only
 from backend.api.db import get_db_connection
-from backend.tracking import engine
+from backend.tracking import engine, event_store
 
 # Where the dashboard is served from (CORS and WebAuthn). Set in .env.
 FRONTEND_ORIGINS = [o.strip().rstrip("/") for o in os.getenv("FRONTEND_ORIGIN", "http://localhost:5173").split(",") if o.strip()]
@@ -72,6 +72,16 @@ def startup_event():
     engine.start_background_tracking()
 
 
+@app.on_event("shutdown")
+def shutdown_event():
+    event_store.stop()          # write out any queued events before exiting
+
+
+# Pagination for event history: newest first, `before` = the last id you got.
+def page_params(limit: int = Query(100, ge=1, le=200), before: Optional[int] = Query(None, ge=1)):
+    return {"limit": limit, "before": before}
+
+
 @app.get("/")
 def read_root():
     return {"message": "Smart Campus AI backend is running"}
@@ -85,9 +95,10 @@ def health_check():
 # ---- Live pipeline: events, camera feed, WebSocket (admin) ----
 
 @app.get("/events")
-def get_events(session=Depends(admin_only)):
-    with engine.events_lock:
-        return {"events": list(engine.events_log)}
+def get_events(session=Depends(admin_only), page=Depends(page_params)):
+    """All recognition events from the database, newest first."""
+    events, next_before = event_store.query_events(**page)
+    return {"events": events, "next_before": next_before}
 
 
 @app.post("/stream-ticket")
@@ -461,35 +472,33 @@ def get_class_roster(session=Depends(teacher_only)):
 
 # ---- Secure, session-derived personal views ----
 
-def events_for(person_type, person_ids):
-    """Recognition events for the given people, matched by ID (never by name)."""
-    ids = set(person_ids)
-    with engine.events_lock:
-        all_events = list(engine.events_log)
-    return [e for e in all_events if e.get("person_type") == person_type and e.get("person_id") in ids]
-
-
 @app.get("/secure/my-events")
-def secure_my_events(session=Depends(current_session)):
-    """The signed-in person's own events. `linked` is false when the account
-    isn't linked to a student or staff record yet."""
+def secure_my_events(session=Depends(current_session), page=Depends(page_params)):
+    """The signed-in person's own events (matched by ID), newest first.
+    `linked` is false when the account isn't linked to a student or staff
+    record yet."""
     if session["student_id"]:
-        return {"events": events_for("student", [session["student_id"]]), "linked": True}
-    if session["staff_id"]:
-        return {"events": events_for("staff", [session["staff_id"]]), "linked": True}
-    return {"events": [], "linked": False}
+        events, next_before = event_store.query_events("student_id = %s", [session["student_id"]], **page)
+    elif session["staff_id"]:
+        events, next_before = event_store.query_events("staff_id = %s", [session["staff_id"]], **page)
+    else:
+        return {"events": [], "next_before": None, "linked": False}
+    return {"events": events, "next_before": next_before, "linked": True}
 
 
 @app.get("/secure/my-class-roster")
-def secure_my_class_roster(session=Depends(teacher_only)):
+def secure_my_class_roster(session=Depends(teacher_only), page=Depends(page_params)):
+    """The teacher's class roster and its students' events (by ID), newest first."""
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     _, class_name, students = teacher_class(cur, session["staff_id"])
     cur.close()
     conn.close()
 
-    class_events = events_for("student", [s["id"] for s in students])
-    return {"class_name": class_name, "students": students, "events": class_events, "linked": bool(session["staff_id"])}
+    ids = [s["id"] for s in students]
+    events, next_before = event_store.query_events("student_id = ANY(%s)", [ids], **page) if ids else ([], None)
+    return {"class_name": class_name, "students": students, "events": events,
+            "next_before": next_before, "linked": bool(session["staff_id"])}
 
 
 # ---- WebAuthn Fingerprint Authentication ----

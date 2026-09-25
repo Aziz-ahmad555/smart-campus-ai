@@ -17,7 +17,7 @@ const CONNECTION = {
 }
 
 export default function DashboardPage() {
-  const { events, status, error } = useLiveEvents()
+  const { events, status, error, loadOlder, hasOlder, loadingOlder } = useLiveEvents()
 
   const stats = useMemo(() => {
     const inside = new Set()
@@ -49,7 +49,7 @@ export default function DashboardPage() {
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="People in view" value={stats.occupancy} hint="Tracked now, based on entries and exits" icon={Users} tone="blue" />
-        <StatCard label="Entries" value={stats.entries} hint="In the current event log" icon={LogIn} tone="emerald" />
+        <StatCard label="Entries" value={stats.entries} hint="In the loaded event history" icon={LogIn} tone="emerald" />
         <StatCard label="Identities recognized" value={stats.identities} hint="Distinct known people" icon={ScanFace} tone="violet" />
         <StatCard
           label="Alerts"
@@ -65,7 +65,13 @@ export default function DashboardPage() {
         <TrafficChart events={events} />
       </div>
 
-      <EventsTable events={events} loading={status === 'connecting' && events.length === 0} />
+      <EventsTable
+        events={events}
+        loading={status === 'connecting' && events.length === 0}
+        onLoadOlder={loadOlder}
+        hasOlder={hasOlder}
+        loadingOlder={loadingOlder}
+      />
     </AppShell>
   )
 }
